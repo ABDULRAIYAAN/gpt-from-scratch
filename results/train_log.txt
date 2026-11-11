@@ -1,0 +1,44 @@
+dataset: 1,115,394 chars | vocab size: 65 | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+step     0 | train loss 4.2172 | val loss 4.2151 | 0.0 min
+step   500 | train loss 1.9046 | val loss 2.0033 | 1.0 min
+step  1000 | train loss 1.6885 | val loss 1.8331 | 2.0 min
+step  1500 | train loss 1.6030 | val loss 1.7670 | 3.0 min
+step  2000 | train loss 1.5579 | val loss 1.7296 | 4.0 min
+step  2500 | train loss 1.5128 | val loss 1.7009 | 5.0 min
+step  3000 | train loss 1.4761 | val loss 1.6639 | 6.0 min
+step  3500 | train loss 1.4585 | val loss 1.6539 | 6.9 min
+step  4000 | train loss 1.4370 | val loss 1.6199 | 7.9 min
+step  4500 | train loss 1.4260 | val loss 1.6017 | 8.9 min
+step  5000 | train loss 1.4047 | val loss 1.6129 | 9.9 min
+
+done in 9.9 min | best val loss 1.6017
+checkpoint saved to checkpoints/ckpt.pt
+
+--- sample ---
+
+DONTES:
+What will mon Margaret, my lord, that thou didst too,
+Or when you thing? seen I am hears the people
+All, a crown to enough, sir, what God pats my cen;
+Are a sharterous crierming sawn'd gone;
+And his good cistiture, littless; take him to his
+vever thou evantage? can a count against to be at as the cways.
+3regd Petrumsethout here beholder; slain,
+Master and littless would you did fellow.
+
+BRUTUS:
+Speak it! well with his him.
+
+GLOUCESTER:
+Away! I will an execution with burnet,
+
+MENENIUS:
+I'll find beg to rolamim'd?
+
+LEONTES:
+Pray you.
+
+LUCENTIO:
+Beinge with his sessibury, as their highne

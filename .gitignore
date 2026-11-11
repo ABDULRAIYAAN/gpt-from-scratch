@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+.DS_Store
+.gradio/
+# downloaded automatically on first run
+data/
+# the small checkpoint (3.4 MB) is committed so sample.py and app.py work after cloning;
+# train bigger models into checkpoints/full/ so they stay out of git
+checkpoints/full/
+checkpoints/sample.txt
