@@ -14,6 +14,7 @@ import argparse
 import base64
 import json
 import os
+from dataclasses import asdict
 
 import numpy as np
 import torch
@@ -22,6 +23,23 @@ from model import GPT, GPTConfig
 from tokenizer import CharTokenizer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def weights_blob(model: GPT, chars: list[str], step: int, val_loss: float) -> dict:
+    """Pack a model's weights as float16 base64 tensors for web/engine.js."""
+    tensors = {}
+    for k, v in model.state_dict().items():
+        if k.endswith("tril"):  # the causal mask is rebuilt in JS, no need to ship it
+            continue
+        a = v.detach().float().cpu().numpy().astype(np.float16)
+        tensors[k] = {"shape": list(a.shape), "b64": base64.b64encode(a.tobytes()).decode()}
+    return {
+        "config": asdict(model.config),
+        "chars": chars,
+        "step": step,
+        "val_loss": val_loss,
+        "tensors": tensors,
+    }
 
 
 def main():
@@ -33,25 +51,20 @@ def main():
     args = p.parse_args()
 
     ckpt = torch.load(args.ckpt, map_location="cpu")
-    state = {k: v for k, v in ckpt["model"].items() if not k.endswith("tril")}
-    tensors = {}
-    for k, v in state.items():
-        a = v.float().numpy().astype(np.float16)
-        tensors[k] = {"shape": list(a.shape), "b64": base64.b64encode(a.tobytes()).decode()}
-    weights = {
-        "config": ckpt["model_config"],
-        "chars": ckpt["chars"],
-        "step": ckpt["step"],
-        "val_loss": ckpt["val_loss"],
-        "tensors": tensors,
-    }
+
+    # Seed before building the model: construction draws random init weights, so the
+    # seed has to come first for the sample below to be the same on every rebuild.
+    torch.manual_seed(args.seed)
+    model = GPT(GPTConfig(**ckpt["model_config"]))
+    model.load_state_dict(ckpt["model"])  # converts old per-head checkpoints
+    model.eval()
+
+    # Export what the loaded model holds, so the page always gets the current layout
+    # (fused sa.qkv.weight) even when the checkpoint was saved in the old one.
+    weights = weights_blob(model, ckpt["chars"], ckpt["step"], ckpt["val_loss"])
 
     # Sample shown before the visitor presses Write, ending on a complete speech.
-    torch.manual_seed(args.seed)
     tok = CharTokenizer(ckpt["chars"])
-    model = GPT(GPTConfig(**ckpt["model_config"]))
-    model.load_state_dict(ckpt["model"])
-    model.eval()
     idx = torch.tensor([tok.encode(args.prompt)], dtype=torch.long)
     text = tok.decode(model.generate(idx, 420, temperature=0.8)[0].tolist())[len(args.prompt):]
     if "\n\n" in text:

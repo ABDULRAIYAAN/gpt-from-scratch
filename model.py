@@ -8,6 +8,7 @@ Shape notation used in comments:
     B = batch size
     T = time / sequence length (number of tokens in context)
     C = embedding size (n_embd)
+    nh = number of attention heads (n_head)
     H = head size (n_embd // n_head)
 """
 
@@ -28,50 +29,72 @@ class GPTConfig:
     dropout: float = 0.2
 
 
-class Head(nn.Module):
-    """One head of causal (masked) self-attention."""
+def upgrade_state_dict(state_dict: dict, n_head: int, n_layer: int) -> dict:
+    """Return a copy of state_dict with old per-head attention weights fused.
 
-    def __init__(self, config: GPTConfig, head_size: int):
-        super().__init__()
-        self.key = nn.Linear(config.n_embd, head_size, bias=False)
-        self.query = nn.Linear(config.n_embd, head_size, bias=False)
-        self.value = nn.Linear(config.n_embd, head_size, bias=False)
-        # Lower-triangular mask: token t may only look at tokens 0..t.
-        # Registered as a buffer so it moves with the model but is not trained.
-        self.register_buffer(
-            "tril", torch.tril(torch.ones(config.block_size, config.block_size))
-        )
-        self.dropout = nn.Dropout(config.dropout)
-        self.head_size = head_size
-
-    def forward(self, x):
-        B, T, C = x.shape
-        k = self.key(x)    # (B, T, H)  what each token contains
-        q = self.query(x)  # (B, T, H)  what each token is looking for
-
-        # Attention scores: how much each token cares about every earlier token.
-        # Scaled by 1/sqrt(head_size) so softmax does not saturate at init.
-        wei = q @ k.transpose(-2, -1) * self.head_size**-0.5  # (B, T, T)
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))  # no peeking at the future
-        wei = F.softmax(wei, dim=-1)
-        wei = self.dropout(wei)
-
-        v = self.value(x)  # (B, T, H)  what each token shares if attended to
-        return wei @ v     # (B, T, H)  weighted sum of values
+    Older checkpoints stored one key/query/value Linear per head
+    (blocks.{l}.sa.heads.{h}.{key,query,value}.weight, each (H, C)) plus a
+    tril mask per head. The model now keeps them in a single (3C, C) weight,
+    blocks.{l}.sa.qkv.weight, laid out as [query; key; value] with the heads
+    stacked inside each part. A state dict that is already fused comes back
+    unchanged (as a copy).
+    """
+    sd = dict(state_dict)
+    for l in range(n_layer):
+        p = f"blocks.{l}.sa."
+        if f"{p}heads.0.query.weight" not in sd:
+            continue
+        parts = []
+        for name in ("query", "key", "value"):
+            parts += [sd.pop(f"{p}heads.{h}.{name}.weight") for h in range(n_head)]
+        sd[f"{p}qkv.weight"] = torch.cat(parts, dim=0)
+        for h in range(n_head):
+            sd.pop(f"{p}heads.{h}.tril", None)
+    return sd
 
 
 class MultiHeadAttention(nn.Module):
-    """Several attention heads running in parallel, outputs concatenated."""
+    """Causal (masked) self-attention with all heads computed together.
+
+    One Linear produces the queries, keys and values for every head at once,
+    then the heads become an extra batch axis, so the whole layer is a few
+    large matrix multiplies instead of a Python loop over heads. Each head
+    still attends independently over its own H-wide slice.
+    """
 
     def __init__(self, config: GPTConfig):
         super().__init__()
-        head_size = config.n_embd // config.n_head
-        self.heads = nn.ModuleList([Head(config, head_size) for _ in range(config.n_head)])
-        self.proj = nn.Linear(head_size * config.n_head, config.n_embd)
+        assert config.n_embd % config.n_head == 0, "n_embd must be divisible by n_head"
+        self.n_head = config.n_head
+        self.head_size = config.n_embd // config.n_head
+        # Rows [0:C) are queries, [C:2C) keys, [2C:3C) values; head h owns rows h*H:(h+1)*H of each.
+        self.qkv = nn.Linear(config.n_embd, 3 * config.n_embd, bias=False)
+        self.proj = nn.Linear(config.n_embd, config.n_embd)
+        self.attn_dropout = nn.Dropout(config.dropout)
         self.dropout = nn.Dropout(config.dropout)
+        # Lower-triangular mask: token t may only look at tokens 0..t.
+        # A buffer so it moves with the model, but not saved: it is rebuilt from block_size.
+        self.register_buffer(
+            "tril", torch.tril(torch.ones(config.block_size, config.block_size)), persistent=False
+        )
 
     def forward(self, x):
-        out = torch.cat([h(x) for h in self.heads], dim=-1)  # (B, T, C)
+        B, T, C = x.shape
+        q, k, v = self.qkv(x).split(C, dim=2)  # each (B, T, C)
+        # Split C into heads and move the head axis next to the batch axis.
+        q = q.view(B, T, self.n_head, self.head_size).transpose(1, 2)  # (B, nh, T, H)  what each token is looking for
+        k = k.view(B, T, self.n_head, self.head_size).transpose(1, 2)  # (B, nh, T, H)  what each token contains
+        v = v.view(B, T, self.n_head, self.head_size).transpose(1, 2)  # (B, nh, T, H)  what each token shares
+
+        # Attention scores for every head at once.
+        # Scaled by 1/sqrt(head_size) so softmax does not saturate at init.
+        wei = q @ k.transpose(-2, -1) * self.head_size**-0.5  # (B, nh, T, T)
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))  # no peeking at the future
+        wei = F.softmax(wei, dim=-1)
+        wei = self.attn_dropout(wei)
+
+        out = wei @ v  # (B, nh, T, H)  weighted sum of values
+        out = out.transpose(1, 2).contiguous().view(B, T, C)  # concatenate the heads
         return self.dropout(self.proj(out))
 
 
@@ -126,6 +149,11 @@ class GPT(nn.Module):
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
+        """Load weights, converting checkpoints saved with the old per-head attention layout."""
+        state_dict = upgrade_state_dict(state_dict, self.config.n_head, self.config.n_layer)
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
 
     def num_params(self) -> int:
         return sum(p.numel() for p in self.parameters())

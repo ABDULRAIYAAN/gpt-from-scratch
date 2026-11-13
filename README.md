@@ -70,7 +70,18 @@ python app.py                       # Gradio app at http://127.0.0.1:7860
 python export_web.py                # rebuild docs/index.html from checkpoints/ckpt.pt
 ```
 
+Checkpoints saved before the attention heads were batched (one key/query/value layer per head) still load: `GPT.load_state_dict` converts them to the fused layout, and `web/engine.js` accepts either layout.
+
 `docs/index.html` is a single static file with the weights embedded, so it can be opened locally or served with GitHub Pages.
+
+### Tests
+
+```bash
+pip install pytest
+python -m pytest tests
+```
+
+The tests check that the batched attention gives the same outputs as the original per-head version, that `checkpoints/ckpt.pt` still loads, and that the JavaScript engine matches PyTorch for both weight layouts (the engine tests need Node.js and are skipped without it).
 
 ## How it works
 
@@ -85,8 +96,7 @@ characters -> token embedding + position embedding
 |---|---|---|
 | `CharTokenizer` | `tokenizer.py` | Maps each of the 65 characters to an integer and back |
 | `get_batch` | `data.py` | Samples random 64-character chunks; targets are the inputs shifted by one |
-| `Head` | `model.py` | One attention head: queries and keys score every earlier character (scaled by 1/sqrt(head_size)), a lower-triangular mask hides the future, and softmax weights the values |
-| `MultiHeadAttention` | `model.py` | Four 32-wide heads in parallel, concatenated and projected |
+| `MultiHeadAttention` | `model.py` | Causal self-attention with four 32-wide heads computed together: one `Linear(C, 3C)` makes every head's queries, keys and values, the heads become a batch axis, queries and keys score every earlier character (scaled by 1/sqrt(head_size)), a lower-triangular mask hides the future, softmax weights the values, and the heads are concatenated and projected |
 | `FeedForward` | `model.py` | Per-character MLP with a 4x expansion and ReLU |
 | `Block` | `model.py` | Attention then feed-forward, each with pre-LayerNorm and a residual connection |
 | `GPT` | `model.py` | Embeddings, four blocks, output head, and `generate()` with temperature and top-k sampling |
@@ -129,7 +139,10 @@ gpt-from-scratch/
 ├── web/
 │   ├── engine.js         forward pass in JavaScript
 │   └── template.html     browser demo page
-├── docs/index.html       built browser demo (static, weights embedded)
+├── docs/
+│   ├── index.html        built browser demo (static, weights embedded)
+│   └── DEVLOG.md         what changed and why, build by build
+├── tests/                pytest tests for the model, checkpoint loading and the JS engine
 ├── checkpoints/ckpt.pt   trained small model
 ├── results/              training log and a full sample
 ├── assets/               screenshots
@@ -140,7 +153,7 @@ gpt-from-scratch/
 ## Next steps
 
 - [ ] Train the `full` configuration on a GPU and add the result
-- [ ] Batch all attention heads into one matrix multiply
+- [x] Batch all attention heads into one matrix multiply
 - [ ] Replace the character tokenizer with BPE (`tiktoken`)
 - [ ] Train on a different dataset, such as Malay text
 

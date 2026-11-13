@@ -40,17 +40,24 @@ function createGPT(blob) {
     return y;
   }
 
+  // Attention q/k/v for every head as one (3C, C) weight: rows [0, C) are queries,
+  // [C, 2C) keys, [2C, 3C) values, and head h owns rows h*HS..(h+1)*HS of each part.
+  // Older exports stored one key/query/value matrix per head; stack those the same way.
+  function fusedQKV(p) {
+    if (W[p + 'sa.qkv.weight']) return W[p + 'sa.qkv.weight'];
+    const w = new Float32Array(3 * C * C);
+    ['query', 'key', 'value'].forEach((name, part) => {
+      for (let hd = 0; hd < NH; hd++) w.set(W[`${p}sa.heads.${hd}.${name}.weight`], (part * C + hd * HS) * C);
+    });
+    return w;
+  }
+
   // pre-pack per-layer weights
   const layers = [];
   for (let l = 0; l < L; l++) {
     const p = `blocks.${l}.`;
-    const heads = [];
-    for (let h = 0; h < NH; h++) {
-      const hp = `${p}sa.heads.${h}.`;
-      heads.push({ q: W[hp + 'query.weight'], k: W[hp + 'key.weight'], v: W[hp + 'value.weight'] });
-    }
     layers.push({
-      ln1g: W[p + 'ln1.weight'], ln1b: W[p + 'ln1.bias'], heads,
+      ln1g: W[p + 'ln1.weight'], ln1b: W[p + 'ln1.bias'], qkvW: fusedQKV(p),
       projW: W[p + 'sa.proj.weight'], projB: W[p + 'sa.proj.bias'],
       ln2g: W[p + 'ln2.weight'], ln2b: W[p + 'ln2.bias'],
       f1W: W[p + 'ffwd.net.0.weight'], f1B: W[p + 'ffwd.net.0.bias'],
@@ -62,7 +69,7 @@ function createGPT(blob) {
 
   // scratch buffers
   const x = new Float32Array(C), h = new Float32Array(C), cat = new Float32Array(C), tmp = new Float32Array(C);
-  const q = new Float32Array(HS), ff = new Float32Array(4 * C), logits = new Float32Array(V);
+  const qkv = new Float32Array(3 * C), ff = new Float32Array(4 * C), logits = new Float32Array(V);
   const scale = 1 / Math.sqrt(HS);
 
   let cacheK, cacheV, pos, lastAtt = new Float32Array(0);
@@ -80,11 +87,12 @@ function createGPT(blob) {
     for (let l = 0; l < L; l++) {
       const ly = layers[l];
       layerNorm(x, ly.ln1g, ly.ln1b, h);
+      linear(h, ly.qkvW, null, 3 * C, C, qkv);  // queries, keys and values for all heads at once
       for (let hd = 0; hd < NH; hd++) {
-        const w = ly.heads[hd];
-        linear(h, w.q, null, HS, C, q);
-        const k = linear(h, w.k, null, HS, C, new Float32Array(HS));
-        const v = linear(h, w.v, null, HS, C, new Float32Array(HS));
+        const off = hd * HS;
+        const q = qkv.subarray(off, off + HS);
+        const k = qkv.slice(C + off, C + off + HS);          // copied: kept in the cache
+        const v = qkv.slice(2 * C + off, 2 * C + off + HS);
         const Ks = cacheK[l][hd], Vs = cacheV[l][hd];
         Ks.push(k); Vs.push(v);
         const T = Ks.length, att = new Float32Array(T);
@@ -95,7 +103,6 @@ function createGPT(blob) {
           att[t] = s * scale; if (att[t] > mx) mx = att[t];
         }
         let sum = 0; for (let t = 0; t < T; t++) { att[t] = Math.exp(att[t] - mx); sum += att[t]; }
-        const off = hd * HS;
         for (let i = 0; i < HS; i++) cat[off + i] = 0;
         for (let t = 0; t < T; t++) {
           const a = att[t] / sum, vt = Vs[t];
