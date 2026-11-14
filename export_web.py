@@ -51,6 +51,8 @@ def main():
     args = p.parse_args()
 
     ckpt = torch.load(args.ckpt, map_location="cpu")
+    if "chars" not in ckpt:
+        raise SystemExit("the browser demo only supports character-level checkpoints (train.py --tokenizer char)")
 
     # Seed before building the model: construction draws random init weights, so the
     # seed has to come first for the sample below to be the same on every rebuild.

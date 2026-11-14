@@ -56,8 +56,11 @@ The dataset downloads automatically on first run, and the trained small model is
 python train.py --config full --device cuda --out checkpoints/full   # 10.8M-parameter model on a GPU
 python train.py --data my_text.txt --out checkpoints/mine            # train on your own text
 python train.py --config small --n-layer 6 --max-iters 8000          # override any hyperparameter
+python train.py --config small --tokenizer bpe --out checkpoints/bpe # byte-pair encoding instead of characters
 python sample.py --tokens 1000 --top-k 20 --num-samples 3
 ```
+
+`--tokenizer bpe` learns a byte-pair encoding from the training text (512 tokens by default, set with `--bpe-vocab-size`) and stores it in the checkpoint, so `sample.py` picks it up automatically. On Tiny Shakespeare, 512 BPE tokens cover 1.94 characters each on average, so a 64-token context sees about twice as much text. The browser demo and `app.py` stay character-level.
 
 To train the full model on a free GPU, open [`train_colab.ipynb`](train_colab.ipynb) in Google Colab, switch the runtime to a T4 GPU, and run every cell.
 
@@ -95,6 +98,7 @@ characters -> token embedding + position embedding
 | Component | File | Role |
 |---|---|---|
 | `CharTokenizer` | `tokenizer.py` | Maps each of the 65 characters to an integer and back |
+| `BPETokenizer` | `tokenizer.py` | Byte-level byte-pair encoding written from scratch: starts from the 256 bytes and repeatedly merges the most frequent adjacent pair into a new token, never across word boundaries |
 | `get_batch` | `data.py` | Samples random 64-character chunks; targets are the inputs shifted by one |
 | `MultiHeadAttention` | `model.py` | Causal self-attention with four 32-wide heads computed together: one `Linear(C, 3C)` makes every head's queries, keys and values, the heads become a batch axis, queries and keys score every earlier character (scaled by 1/sqrt(head_size)), a lower-triangular mask hides the future, softmax weights the values, and the heads are concatenated and projected |
 | `FeedForward` | `model.py` | Per-character MLP with a 4x expansion and ReLU |
@@ -129,7 +133,7 @@ Models like ChatGPT use the same core architecture at a far larger scale, with s
 ```
 gpt-from-scratch/
 ├── model.py              GPT architecture
-├── tokenizer.py          character-level tokenizer
+├── tokenizer.py          character-level and BPE tokenizers
 ├── data.py               dataset download, batching, device selection
 ├── bigram.py             baseline model
 ├── train.py              training loop, evaluation, checkpointing
@@ -154,7 +158,9 @@ gpt-from-scratch/
 
 - [ ] Train the `full` configuration on a GPU and add the result
 - [x] Batch all attention heads into one matrix multiply
-- [ ] Replace the character tokenizer with BPE (`tiktoken`)
+- [ ] Replace the character tokenizer with BPE
+  - [x] Byte-level BPE tokenizer written from scratch, usable with `train.py --tokenizer bpe`
+  - [ ] Train a BPE model and compare it with the character model in bits per character
 - [ ] Train on a different dataset, such as Malay text
 
 ## Acknowledgements

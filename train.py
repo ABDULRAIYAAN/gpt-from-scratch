@@ -5,6 +5,7 @@ Usage:
     python train.py                      # full model from the video (use a GPU)
     python train.py --config small       # small model that trains on a laptop CPU
     python train.py --data my_text.txt   # train on your own text
+    python train.py --config small --tokenizer bpe --bpe-vocab-size 512   # subword tokens
     python train.py --max-iters 2000 --device cuda
 """
 
@@ -18,7 +19,7 @@ import torch
 
 from data import DEFAULT_PATH, get_batch, load_dataset, pick_device
 from model import GPT, GPTConfig
-from tokenizer import CharTokenizer
+from tokenizer import BPETokenizer, CharTokenizer
 
 # Two presets. "full" matches the hyperparameters in the video (~10.8M params).
 PRESETS = {
@@ -40,6 +41,9 @@ def parse_args():
     p.add_argument("--out", default="checkpoints", help="directory for ckpt.pt and samples")
     p.add_argument("--device", default="auto", help="auto | cpu | cuda | mps")
     p.add_argument("--seed", type=int, default=1337)
+    p.add_argument("--tokenizer", choices=["char", "bpe"], default="char",
+                   help="char: one token per character; bpe: byte-pair encoding learned from the data")
+    p.add_argument("--bpe-vocab-size", type=int, default=512, help="vocabulary size for --tokenizer bpe")
     # Any preset value can be overridden from the command line.
     for k, v in PRESETS["full"].items():
         p.add_argument(f"--{k.replace('_', '-')}", type=type(v), default=None)
@@ -76,11 +80,18 @@ def main():
 
     # ---- data ----
     text = load_dataset(args.data)
-    tok = CharTokenizer.from_text(text)
+    if args.tokenizer == "bpe":
+        print(f"learning {args.bpe_vocab_size - 256} BPE merges ...")
+        tok = BPETokenizer.train(text, args.bpe_vocab_size)
+    else:
+        tok = CharTokenizer.from_text(text)
     data = torch.tensor(tok.encode(text), dtype=torch.long)
     n = int(0.9 * len(data))  # first 90% train, last 10% validation
     splits = {"train": data[:n], "val": data[n:]}
-    print(f"dataset: {len(text):,} chars | vocab size: {tok.vocab_size} | device: {device}")
+    print(
+        f"dataset: {len(text):,} chars -> {len(data):,} tokens ({len(text) / len(data):.2f} chars/token) | "
+        f"vocab size: {tok.vocab_size} | tokenizer: {args.tokenizer} | device: {device}"
+    )
 
     # ---- model ----
     model_cfg = GPTConfig(
@@ -116,7 +127,9 @@ def main():
                     {
                         "model": model.state_dict(),
                         "model_config": asdict(model_cfg),
-                        "chars": tok.chars,
+                        "tokenizer": tok.state(),
+                        # app.py and export_web.py read the character list directly
+                        **({"chars": tok.chars} if args.tokenizer == "char" else {}),
                         "step": it,
                         "val_loss": best_val,
                         "history": history,
@@ -137,7 +150,8 @@ def main():
 
     # ---- sample from the trained model ----
     model.eval()
-    context = torch.zeros((1, 1), dtype=torch.long, device=device)  # token 0 is '\n'
+    start = tok.encode("\n") if "\n" in text else [0]  # start of a new line when the text has one
+    context = torch.tensor([start], dtype=torch.long, device=device)
     sample = tok.decode(model.generate(context, max_new_tokens=1000)[0].tolist())
     with open(os.path.join(args.out, "sample.txt"), "w", encoding="utf-8") as f:
         f.write(sample)

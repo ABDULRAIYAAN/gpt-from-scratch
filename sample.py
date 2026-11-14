@@ -12,7 +12,7 @@ import torch
 
 from data import pick_device
 from model import GPT, GPTConfig
-from tokenizer import CharTokenizer
+from tokenizer import load_tokenizer
 
 
 def main():
@@ -32,7 +32,7 @@ def main():
     device = pick_device(args.device)
 
     ckpt = torch.load(args.ckpt, map_location=device)
-    tok = CharTokenizer(ckpt["chars"])
+    tok = load_tokenizer(ckpt)
     model = GPT(GPTConfig(**ckpt["model_config"])).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
