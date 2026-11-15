@@ -17,7 +17,7 @@ from dataclasses import asdict
 
 import torch
 
-from data import DEFAULT_PATH, get_batch, load_dataset, pick_device
+from data import DEFAULT_PATH, get_batch, load_dataset, pick_device, split_text
 from model import GPT, GPTConfig
 from tokenizer import BPETokenizer, CharTokenizer
 
@@ -80,16 +80,22 @@ def main():
 
     # ---- data ----
     text = load_dataset(args.data)
+    # Split the text itself (first 90% train, last 10% validation) before tokenizing, so every
+    # tokenizer is validated on exactly the same characters and evaluate.py can compare them.
+    # For characters this is the same split as before; BPE merges are learned from train text only.
+    train_text, val_text = split_text(text)
     if args.tokenizer == "bpe":
         print(f"learning {args.bpe_vocab_size - 256} BPE merges ...")
-        tok = BPETokenizer.train(text, args.bpe_vocab_size)
+        tok = BPETokenizer.train(train_text, args.bpe_vocab_size)
     else:
         tok = CharTokenizer.from_text(text)
-    data = torch.tensor(tok.encode(text), dtype=torch.long)
-    n = int(0.9 * len(data))  # first 90% train, last 10% validation
-    splits = {"train": data[:n], "val": data[n:]}
+    splits = {
+        "train": torch.tensor(tok.encode(train_text), dtype=torch.long),
+        "val": torch.tensor(tok.encode(val_text), dtype=torch.long),
+    }
+    n_tokens = len(splits["train"]) + len(splits["val"])
     print(
-        f"dataset: {len(text):,} chars -> {len(data):,} tokens ({len(text) / len(data):.2f} chars/token) | "
+        f"dataset: {len(text):,} chars -> {n_tokens:,} tokens ({len(text) / n_tokens:.2f} chars/token) | "
         f"vocab size: {tok.vocab_size} | tokenizer: {args.tokenizer} | device: {device}"
     )
 

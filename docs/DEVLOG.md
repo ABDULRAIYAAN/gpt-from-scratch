@@ -1,5 +1,28 @@
 # Devlog
 
+## 2026-11-15: Characters vs BPE, measured in bits per character
+
+**What changed.** New `evaluate.py` scores a checkpoint on the whole validation split instead of random batches. It slides the 64-token window over the text, adds up -log p for every token exactly once, and reports loss per token, bits per token and bits per character. Bits per character is the number that matters here: a BPE token is about two characters, so its loss per token is naturally higher and can't be put next to the character model's. Dividing the total bits by the number of characters puts both on the same scale. Give it several checkpoints and it prints one table. `--stride` makes the windows overlap so every token gets more context, at the cost of more compute.
+
+**Fixing the split first.** `train.py` used to tokenize the whole text and then take the first 90% of the tokens for training. For characters that is fine, but for BPE the boundary landed at a different character than for the character model, and the BPE merges were learned from the full text, validation part included. Now the text itself is split (new `split_text` in `data.py`) and each part is encoded separately, and BPE learns its merges from the training text only. For the character tokenizer the tensors are exactly the same as before, so `checkpoints/ckpt.pt` is still a fair baseline. Because the merges no longer see the validation text, they compress it a bit less: 1.88 characters per token on the validation split, against 1.94 over the whole dataset.
+
+**The comparison.** I trained the `small` config with `--tokenizer bpe --max-iters 5000 --eval-interval 500`, the same number of steps as the committed character model, on the 2-core CPU. It took 11.1 minutes, though that is a little inflated because I ran the tests alongside it for part of the run. Best validation loss was 2.838 nats per token at step 5000. On the full validation split (111,540 characters):
+
+| | Characters | BPE, 512 tokens |
+|---|---|---|
+| Parameters | 816,705 | 931,584 |
+| Validation tokens | 111,539 | 59,400 |
+| Context window | 64 characters | ~120 characters |
+| Loss per token | 1.6126 | 2.8339 |
+| Bits per character | 2.327 | 2.177 |
+| Bits per character, `--stride 16` | 2.272 | 2.151 |
+
+So BPE comes out 6.4% better per character. It isn't a perfectly controlled result: the BPE model has 14% more parameters (512-row embedding and output layers instead of 65), and with the same 64-token window it sees about twice as much text, which is half the reason to use BPE in the first place. It also overfits sooner. At step 5000 the gap between train and validation loss was 0.47 nats per token for BPE (about 0.25 per character), against 0.21 for characters, because the same text gives it half as many training tokens. The BPE sample in `results/train_log_bpe.txt` still has made-up words and no real sense.
+
+**Tests.** Added `tests/test_evaluate.py`: every token is scored exactly once for different lengths and strides; the default stride matches a plain back-to-back window loop; `--stride 1` matches predicting each token one forward pass at a time; a model with a zeroed output layer scores exactly log2(65) bits per character; bits per character divides by characters, not tokens, for BPE; the evaluation doesn't leave the model in eval mode; splitting the text gives the same character tokens as the old token split; and the committed checkpoint's full-split loss is within 0.05 of the loss saved at training time (it is 1.6126 against 1.6017).
+
+**Next.** The browser demo is still character-level. Porting the BPE encoder to `web/engine.js` would let the demo use the better model.
+
 ## 2026-11-14: A byte-pair encoding tokenizer, written from scratch
 
 **What changed.** `tokenizer.py` now has a `BPETokenizer` next to the `CharTokenizer`. It is byte-level: the starting vocabulary is the 256 possible bytes, so it can encode any text, including characters it never saw in training. Training counts every adjacent pair of tokens in the text, turns the most frequent pair into a new token, and repeats until the vocabulary reaches the size asked for. Before counting, the text is split into chunks (a word with its leading space, a run of digits, a run of punctuation, a run of whitespace), and merges never cross a chunk boundary, so no token is half of one word and half of the next. Each distinct chunk is processed once and weighted by how often it appears, which is why training is quick. Encoding applies the learned merges in the order they were learned, which gives exactly the tokens training built.

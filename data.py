@@ -21,6 +21,12 @@ def load_dataset(path: str = DEFAULT_PATH) -> str:
         return f.read()
 
 
+def split_text(text: str, train_frac: float = 0.9) -> tuple[str, str]:
+    """First train_frac of the characters for training, the rest for validation."""
+    n = int(train_frac * len(text))
+    return text[:n], text[n:]
+
+
 def get_batch(data: torch.Tensor, block_size: int, batch_size: int, device: str):
     """Sample batch_size random chunks; targets are the inputs shifted one step right."""
     ix = torch.randint(len(data) - block_size, (batch_size,))
