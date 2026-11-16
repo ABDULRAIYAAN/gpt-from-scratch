@@ -72,7 +72,14 @@ python sample.py --tokens 1000 --top-k 20 --num-samples 3
 python evaluate.py checkpoints/ckpt.pt checkpoints/bpe/ckpt.pt       # bits per character on the validation split
 ```
 
-`--tokenizer bpe` learns a byte-pair encoding from the training text (512 tokens by default, set with `--bpe-vocab-size`) and stores it in the checkpoint, so `sample.py` picks it up automatically. On Tiny Shakespeare, 512 BPE tokens cover 1.94 characters each on average, so a 64-token context sees about twice as much text. The browser demo and `app.py` stay character-level.
+`--tokenizer bpe` learns a byte-pair encoding from the training text (512 tokens by default, set with `--bpe-vocab-size`) and stores it in the checkpoint, so `sample.py` picks it up automatically. On Tiny Shakespeare, 512 BPE tokens cover 1.94 characters each on average, so a 64-token context sees about twice as much text. The browser demo and `app.py` stay character-level for now, but `web/tokenizer.js` already has both tokenizers in JavaScript, giving exactly the same ids as `tokenizer.py`:
+
+```js
+// the state tokenizer.py saves: {type: "bpe", merges: [[a, b], ...]} or {type: "char", chars: [...]}
+const tok = createTokenizer(state);
+const ids = tok.encode("ROMEO:\nWhat light");  // same ids as the Python tokenizer
+tok.decode(ids);                               // "ROMEO:\nWhat light"
+```
 
 `evaluate.py` takes any number of checkpoints and prints a table with loss per token, bits per token and bits per character on the full validation split (the last 10% of the text). `--stride 32` uses overlapping windows so every token after the first window gets at least 32 tokens of context; this lowers the numbers a little and takes twice as long.
 
@@ -98,7 +105,7 @@ pip install pytest
 python -m pytest tests
 ```
 
-The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that `checkpoints/ckpt.pt` still loads, and that the JavaScript engine matches PyTorch for both weight layouts (the engine tests need Node.js and are skipped without it).
+The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that `checkpoints/ckpt.pt` still loads, that the JavaScript engine matches PyTorch for both weight layouts, and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
 
 ## How it works
 
@@ -121,6 +128,7 @@ characters -> token embedding + position embedding
 | `GPT` | `model.py` | Embeddings, four blocks, output head, and `generate()` with temperature and top-k sampling |
 | `total_nll`, `evaluate_text` | `evaluate.py` | Slides the context window over the whole validation split, adds up -log p of every token once, and divides by the number of characters to get bits per character |
 | Browser engine | `web/engine.js` | The same forward pass in JavaScript, with a key/value cache |
+| Browser tokenizers | `web/tokenizer.js` | Both tokenizers in JavaScript, built from the state a checkpoint saves; the chunk pattern spells out Python's whitespace set so the ids match exactly |
 
 ### Hyperparameters
 
@@ -159,11 +167,12 @@ gpt-from-scratch/
 ├── export_web.py         builds the browser demo from a checkpoint
 ├── web/
 │   ├── engine.js         forward pass in JavaScript
+│   ├── tokenizer.js      character and BPE tokenizers in JavaScript
 │   └── template.html     browser demo page
 ├── docs/
 │   ├── index.html        built browser demo (static, weights embedded)
 │   └── DEVLOG.md         what changed and why, build by build
-├── tests/                pytest tests for the model, checkpoint loading and the JS engine
+├── tests/                pytest tests for the model, tokenizers, checkpoint loading and the JS engine
 ├── checkpoints/ckpt.pt   trained small model
 ├── results/              training logs and a full sample
 ├── assets/               screenshots
@@ -179,6 +188,8 @@ gpt-from-scratch/
   - [x] Byte-level BPE tokenizer written from scratch, usable with `train.py --tokenizer bpe`
   - [x] Train a BPE model and compare it with the character model in bits per character (2.18 vs 2.33)
   - [ ] Port the BPE tokenizer to the browser demo
+    - [x] BPE and character tokenizers in JavaScript (`web/tokenizer.js`), matching Python id for id
+    - [ ] Export a BPE checkpoint to the page and show tokens instead of characters in the demo
 - [ ] Train on a different dataset, such as Malay text
 
 ## Acknowledgements

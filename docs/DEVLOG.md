@@ -1,5 +1,22 @@
 # Devlog
 
+## 2026-11-16: The tokenizers in JavaScript
+
+**What changed.** New `web/tokenizer.js` has both tokenizers in plain JavaScript. `createTokenizer(state)` takes the same state object `tokenizer.py` saves in a checkpoint (`{type: "char", chars}` or `{type: "bpe", merges}`) and gives back `encode`, `decode`, `vocabSize` and `piece(id)`, the text of a single token, which the demo will need for its labels. The BPE encoder works like the Python one: split the text into chunks, turn each chunk into UTF-8 bytes, then keep applying the earliest-learned merge among the adjacent pairs until none is left. Chunks are cached, since the same words come up again and again. This is the first half of putting the BPE model in the browser demo. The page itself is unchanged for now.
+
+**Getting the ids to match exactly.** Two small differences between Python and JavaScript would have given different tokens:
+
+- The chunk pattern uses `\s`, and the two languages disagree about what counts as whitespace. Python's `\s` matches U+001C to U+001F and U+0085, JavaScript's doesn't, and JavaScript's matches U+FEFF (the byte-order mark), Python's doesn't. So `tokenizer.js` spells out Python's set by hand. It also uses the `u` flag so an emoji counts as one character, not two UTF-16 halves.
+- `TextDecoder` drops a byte-order mark at the start of the text by default, and Python's `decode` keeps it. Passing `ignoreBOM: true` keeps it.
+
+Leaving out either fix makes the new tests fail, which I checked by undoing each one in turn.
+
+**Tests.** Added `tests/test_web_tokenizer.py` (with a small Node helper, `tests/run_tokenizer.js`). It checks that the JavaScript chunks are the same as `CHUNK_PATTERN.findall` on awkward text, including every whitespace character Python knows about; that BPE ids, decoded text and the text of every token match Python; that decoding cut-off multi-byte characters and 600 random id sequences puts U+FFFD in the same places as `errors="replace"`; that the character tokenizer matches, including the error for unknown characters; and that a 512-token BPE learned from the training split gives exactly the same 575,806 ids as Python over all 1,115,394 characters of Tiny Shakespeare. 68 tests pass.
+
+**Speed (Node 22, 2-core CPU).** Encoding the whole dataset takes 127 ms the first time and 74 ms once the chunk cache is warm, against 175 ms in Python. Decoding it back takes 21 ms. A prompt-sized string is under a millisecond, so encoding won't be noticeable in the page.
+
+**Next.** Export a BPE checkpoint with its merges into `docs/index.html` and change the demo to show tokens instead of characters in its probability list and attention map.
+
 ## 2026-11-15: Characters vs BPE, measured in bits per character
 
 **What changed.** New `evaluate.py` scores a checkpoint on the whole validation split instead of random batches. It slides the 64-token window over the text, adds up -log p for every token exactly once, and reports loss per token, bits per token and bits per character. Bits per character is the number that matters here: a BPE token is about two characters, so its loss per token is naturally higher and can't be put next to the character model's. Dividing the total bits by the number of characters puts both on the same scale. Give it several checkpoints and it prints one table. `--stride` makes the windows overlap so every token gets more context, at the cost of more compute.
