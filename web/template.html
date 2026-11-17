@@ -249,6 +249,7 @@ footer { border-top: 1px solid var(--rule); padding-top: 18px; display: flex; ju
 <script type="application/json" id="weights">__WEIGHTS__</script>
 <script type="application/json" id="sample">__SAMPLE__</script>
 <script>
+__TOKENIZER__
 __ENGINE__
 </script>
 <script>
@@ -261,7 +262,9 @@ __ENGINE__
   const SPEEDS = { slow: { every: 7, per: 1 }, normal: { every: 1, per: 1 }, fast: { every: 1, per: 6 } };
   const N_CANDS = 8, WINDOW = 64;
 
-  let gpt = null, sess = null, running = false, length = 600, speed = 'normal', plain = '', written = 0;
+  // written counts characters, not tokens, so the length setting means the same thing
+  // for a BPE model, whose tokens are about two characters each.
+  let gpt = null, sess = null, stream = null, running = false, length = 600, speed = 'normal', plain = '', written = 0;
 
   // ---------- script renderer ----------
   let lineEl = null;
@@ -288,10 +291,21 @@ __ENGINE__
   function setStatus(s) { statusEl.textContent = s; }
 
   // ---------- notes panels ----------
+  // A token is one character for the character model and a few for BPE (" the", "ing").
+  // Inside a longer token, show spaces and newlines with visible marks.
+  function visible(t) { return t.length > 1 ? t.replace(/ /g, '·').replace(/\n/g, '↵') : t; }
+  function tokenName(t) { return t === '\n' ? 'newline' : t === ' ' ? 'space' : visible(t); }
   function charLabel(c) {
     if (c === '\n') return '<span>newline</span>';
     if (c === ' ') return '<span>space</span>';
-    return '<span class="glyph">' + c.replace('&', '&amp;').replace('<', '&lt;') + '</span>';
+    return '<span class="glyph">' + visible(c).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</span>';
+  }
+  // Add the token the model just wrote to the sheet. The stream decoder holds back the
+  // bytes of a character that a byte-level token splits, so the sheet never shows U+FFFD.
+  function write(id, kind) {
+    const text = stream.push(id);
+    append(text, kind);
+    written += Array.from(text).length;
   }
   const candRows = [];
   for (let i = 0; i < N_CANDS; i++) {
@@ -314,13 +328,13 @@ __ENGINE__
     order.forEach((id, i) => {
       const row = candRows[i];
       row.dataset.id = id;
-      row.querySelector('.ch').innerHTML = charLabel(gpt.chars[id]);
+      row.querySelector('.ch').innerHTML = charLabel(gpt.piece(id));
       row.querySelector('.bar').style.width = (100 * p[id] / top).toFixed(1) + '%';
       const pct = p[id] * 100;
       row.querySelector('.pct').textContent = pct >= 10 ? pct.toFixed(0) + '%' : pct >= 1 ? pct.toFixed(1) + '%' : '<1%';
       row.classList.toggle('picked', id === pickedId);
       row.disabled = running;
-      row.setAttribute('aria-label', 'Choose ' + (gpt.chars[id] === '\n' ? 'newline' : gpt.chars[id] === ' ' ? 'space' : gpt.chars[id]) + ', ' + pct.toFixed(1) + ' percent');
+      row.setAttribute('aria-label', 'Choose ' + tokenName(gpt.piece(id)) + ', ' + pct.toFixed(1) + ' percent');
     });
     const { ids, weights } = sess.attention();
     let mx = 0; for (const w of weights) if (w > mx) mx = w;
@@ -328,9 +342,10 @@ __ENGINE__
     for (let i = 0; i < WINDOW; i++) {
       const cell = cells[i], j = i - offset;
       if (j < 0) { cell.className = 'cell empty'; cell.textContent = '·'; cell.style.backgroundColor = ''; continue; }
-      const c = gpt.chars[ids[j]];
+      const c = gpt.piece(ids[j]);
       cell.className = 'cell' + (c === '\n' ? ' nl' : c === ' ' ? ' sp' : '') + (j === ids.length - 1 ? ' latest' : '');
-      cell.textContent = c === '\n' ? '↵' : c === ' ' ? '·' : c;
+      cell.textContent = c === '\n' ? '↵' : c === ' ' ? '·' : visible(c);
+      cell.title = tokenName(c);
       const a = mx > 0 ? weights[j] / mx : 0;
       cell.style.backgroundColor = 'rgba(201, 163, 90, ' + (0.04 + 0.86 * Math.sqrt(a)).toFixed(3) + ')';
       cell.style.color = a > 0.45 ? '#0f141c' : '';
@@ -341,6 +356,7 @@ __ENGINE__
   function promptIds() { return gpt.encode($('prompt').value); }
   function startSession(showOnSheet) {
     sess = gpt.session(promptIds());
+    stream = gpt.decoder();
     if (showOnSheet) {
       clearScript();
       append(gpt.decode(promptIds()), 'prompt');
@@ -353,10 +369,11 @@ __ENGINE__
   }
   function chooseChar(id) {
     ensureLive();
-    sess.push(id); written++;
-    append(gpt.chars[id], 'chosen');
+    sess.push(id);
+    write(id, 'chosen');
     renderNotes(-1);
-    setStatus('You chose ' + (gpt.chars[id] === '\n' ? 'newline' : gpt.chars[id] === ' ' ? 'space' : '“' + gpt.chars[id] + '”'));
+    const t = gpt.piece(id);
+    setStatus('You chose ' + (t === '\n' || t === ' ' ? tokenName(t) : '“' + visible(t) + '”'));
   }
 
   // ---------- controls ----------
@@ -401,10 +418,11 @@ __ENGINE__
     if (!gpt || running) return;
     ensureLive();
     const id = sess.pick(temperature());
-    sess.push(id); written++;
-    append(gpt.chars[id], 'c');
+    sess.push(id);
+    write(id, 'c');
     renderNotes(-1);
-    setStatus('Added ' + (gpt.chars[id] === '\n' ? 'newline' : gpt.chars[id] === ' ' ? 'space' : '“' + gpt.chars[id] + '”'));
+    const t = gpt.piece(id);
+    setStatus('Added ' + (t === '\n' || t === ' ' ? tokenName(t) : '“' + visible(t) + '”'));
   });
 
   function setControls() {
@@ -428,8 +446,8 @@ __ENGINE__
         let lastId = -1;
         for (let i = 0; i < n && written - startCount < length; i++) {
           const id = sess.pick(temperature());
-          sess.push(id); written++; lastId = id;
-          append(gpt.chars[id], 'c');
+          sess.push(id); lastId = id;
+          write(id, 'c');
         }
         renderNotes(-1);
         setStatus('Writing ' + (written - startCount) + ' / ' + length);

@@ -1,7 +1,14 @@
 // Browser inference engine for the GPT checkpoint. Plain JS, no dependencies.
 // Mirrors model.py: token + position embeddings, n_layer pre-LN blocks of causal
 // multi-head attention and a ReLU MLP, final LayerNorm and linear head.
-// Uses a key/value cache so each new character costs one position of compute.
+// Uses a key/value cache so each new token costs one position of compute.
+//
+// The tokenizer comes from web/tokenizer.js and is built from the state the export
+// stores in the blob, so the same engine runs character-level and BPE checkpoints.
+// In the page, tokenizer.js is inlined before this file; in Node it is required.
+const tokenizerLib = typeof createTokenizer === 'function'
+  ? { createTokenizer }
+  : require('./tokenizer.js');
 
 function halfToFloat(h) {
   const s = (h & 0x8000) ? -1 : 1, e = (h >> 10) & 0x1f, f = h & 0x3ff;
@@ -21,7 +28,10 @@ function createGPT(blob) {
   const cfg = blob.config, C = cfg.n_embd, NH = cfg.n_head, HS = C / NH, L = cfg.n_layer, V = cfg.vocab_size;
   const W = {};
   for (const k in blob.tensors) W[k] = decodeTensor(blob.tensors[k]);
-  const chars = blob.chars, stoi = new Map(chars.map((c, i) => [c, i]));
+  // Exports from before BPE support stored only the character list.
+  const tokState = blob.tokenizer || { type: 'char', chars: blob.chars };
+  const tok = tokenizerLib.createTokenizer(tokState);
+  if (tok.vocabSize !== V) throw new Error(`tokenizer has ${tok.vocabSize} tokens but the model expects ${V}`);
 
   // y = W x + b, W stored row-major (out, in) like nn.Linear
   function linear(x, w, b, nOut, nIn, y) {
@@ -154,12 +164,16 @@ function createGPT(blob) {
     return p;
   }
 
+  // An empty prompt starts from a newline, like sample.py. For the character model this
+  // is id 0, as before; for BPE, id 0 is the byte 0x00, which training never saw.
+  const START = (() => { try { const ids = tok.encode('\n'); return ids.length ? ids : [0]; } catch (e) { return [0]; } })();
+
   // A writing session. Only one session is live at a time (they share the key/value cache).
   // When the context window fills, it re-primes on the most recent half of the window,
-  // so the model always sees between block/2 and block characters.
+  // so the model always sees between block/2 and block tokens.
   function session(promptIds) {
     const block = cfg.block_size, keep = Math.floor(block / 2);
-    let ctx = promptIds.length ? promptIds.slice(-block) : [0];
+    let ctx = promptIds.length ? promptIds.slice(-block) : START.slice();
     let lg = Float32Array.from(prime(ctx)), att = lastAtt;
     return {
       probs: (temperature = 1.0) => softmax(lg, temperature),
@@ -175,17 +189,28 @@ function createGPT(blob) {
   }
 
   // Streaming generator. When the context window fills, it re-primes on the most
-  // recent half of the window, so the model always sees between block/2 and block chars.
+  // recent half of the window, so the model always sees between block/2 and block tokens.
   function generator(promptIds, { temperature = 1.0, topK = 0, rand = Math.random } = {}) {
     const s = session(promptIds);
     return { next() { const t = s.pick(temperature, topK, rand); s.push(t); return t; } };
   }
 
+  // The character tokenizer throws on characters it never saw; the page drops them
+  // instead (and warns about them with unknown()). BPE can encode any text.
+  const unknown = s => tok.unknown(s);
+  const encode = s => {
+    const bad = new Set(unknown(s));
+    return tok.encode(bad.size ? Array.from(s).filter(c => !bad.has(c)).join('') : s);
+  };
+
   return {
-    config: cfg, chars, step: blob.step, valLoss: blob.val_loss,
-    encode: s => Array.from(s).filter(c => stoi.has(c)).map(c => stoi.get(c)),
-    unknown: s => [...new Set(Array.from(s).filter(c => !stoi.has(c)))],
-    decode: ids => ids.map(i => chars[i]).join(''),
+    config: cfg, step: blob.step, valLoss: blob.val_loss,
+    tokenizer: tokState.type,                  // 'char' or 'bpe'
+    chars: tokState.type === 'char' ? tokState.chars : null,
+    encode, unknown,
+    decode: ids => tok.decode(ids),
+    piece: id => tok.piece(id),                // text of one token, for labels
+    decoder: () => tok.decoder(),              // turns ids into text as they are written
     prime: ids => Float32Array.from(prime(ids)),
     generator, session,
   };

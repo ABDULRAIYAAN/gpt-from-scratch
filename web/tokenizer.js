@@ -54,6 +54,8 @@ function createCharTokenizer(chars) {
     },
     decode: ids => ids.map(i => chars[i]).join(''),
     piece: id => chars[id],
+    // Every id is a whole character, so streaming text needs no buffering.
+    decoder: () => ({ push: id => chars[id] }),
   };
 }
 
@@ -114,6 +116,15 @@ function createBPETokenizer(merges) {
     },
     decode: ids => fromUtf8.decode(bytesOf(ids)),
     piece: id => fromUtf8.decode(vocab[id]),  // text of one token, for labels in the page
+    // Decode a stream of ids one at a time, for text that is written token by token.
+    // A byte-level token can be part of a multi-byte character (an emoji is 4 bytes, and
+    // its bytes may land in different tokens), so push() holds back unfinished bytes and
+    // returns only the characters that are complete. The text it returns, joined
+    // together, is decode(ids) for any ids that form valid UTF-8.
+    decoder() {
+      const d = new TextDecoder('utf-8', { ignoreBOM: true });
+      return { push: id => d.decode(vocab[id], { stream: true }) };
+    },
   };
 }
 
