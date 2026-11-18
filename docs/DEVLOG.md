@@ -1,5 +1,21 @@
 # Devlog
 
+## 2026-11-18: A BPE version of the demo page
+
+**What changed.** The page's text used to be written for the character model, and yesterday's BPE page still said "65 characters", "next character" and "the 64 characters it can see". Now `export_web.py` writes the wording from the checkpoint. `web/template.html` has `{{placeholders}}` for every sentence that depends on the model, and `page_text()` fills them: the lede, the "Next letter" button (now "Next token" for BPE), the guesses and attention captions, the about section and the whole spec table. The parameter count, layers, heads, width and the "N times smaller than GPT-3" figure are all worked out from the model, so they can't go stale. The placeholders are filled before the scripts and weights go in, and the export fails if one is left unfilled.
+
+**Numbers that need the text.** A BPE page gives its context as "64 tokens, ~120 characters" and shows bits per character, which is the number that can be compared with the character model. Both come from running `evaluate_text` over the validation split while exporting; the whole BPE export takes about 4 seconds. If the dataset can't be read, the page simply leaves those numbers out. The training row is built from three new fields `train.py` now saves (`max_iters`, `minutes`, `hardware`). The minutes are only shown if the saved step is the last one, because otherwise they don't cover the whole run. The committed checkpoint predates these fields, so its row is kept as a constant.
+
+**Attention strip.** For the character model the strip is a 16-column grid of square cells. A BPE token can be ` Gloucester`, so on a BPE page the strip now flows like text: each cell is as wide as its token, and only the tokens actually in the window are shown, not empty placeholders. The guesses column is also a little wider. All of this is behind a `tokens` class on `<main>`, so the character page's layout doesn't change.
+
+**Checking the character page didn't change.** The rebuilt `docs/index.html` differs from yesterday's only in the six new CSS lines that apply to BPE pages. The weights, sample and every word of text are byte for byte the same. `test_export_builds_a_fused_page` now also checks that the exporter rebuilds the committed `docs/index.html` exactly, so the page and the code can't drift apart.
+
+**Publishing it.** I retrained the BPE model (`--tokenizer bpe --max-iters 5000 --eval-interval 500`). It gave exactly the same losses as before at every eval step (best validation loss 2.838), since the seed is fixed. It took 13.9 minutes this time, against 11.1 before, because I was editing and running checks alongside it. The page records the 13.9, rounded to 14 min. The export measured 1.88 characters per token and 2.177 bits per character, the same as the comparison table. `docs/bpe.html` is 2.5 MB. In headless Chromium with a seeded `Math.random`, it wrote 600 characters with no errors and no U+FFFD. The strip showed 42 tokens, none of them cut off, and guesses like `What` were shown whole. The character page gave the same results as before.
+
+**Tests.** New `tests/test_export.py` checks that `page_text` fills exactly the placeholders the template has, for both tokenizers; that the character wording is unchanged sentence by sentence, with no "token" anywhere in its body; that a BPE page talks about tokens and has none of the character text left; that the BPE page without validation stats drops those numbers cleanly; and that `training_summary` leaves out the minutes when the best step wasn't the last. The BPE export test now passes `--data` and checks for the bits per character row. 76 tests pass, up from 71.
+
+**Next.** `app.py` is the last part of the project that only runs the character model.
+
 ## 2026-11-17: The browser engine runs BPE checkpoints
 
 **What changed.** `export_web.py` used to refuse anything but a character-level checkpoint. Now it stores the checkpoint's tokenizer state in the page next to the weights and inlines `web/tokenizer.js` before `web/engine.js`. `createGPT` builds the tokenizer from that state, so the same engine runs either model. It still reads older exports that only stored the character list. `python export_web.py --ckpt checkpoints/bpe/ckpt.pt --out docs/bpe.html` now builds a working BPE page. `docs/index.html` stays the character model.

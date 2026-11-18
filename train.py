@@ -115,6 +115,12 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg["learning_rate"])
 
     # ---- training loop ----
+    if device == "cuda":
+        hardware = torch.cuda.get_device_name()
+    elif device == "cpu":
+        hardware = f"{os.cpu_count()}-core CPU"
+    else:
+        hardware = device.upper()
     best_val = float("inf")
     history = []
     t0 = time.time()
@@ -139,6 +145,10 @@ def main():
                         "step": it,
                         "val_loss": best_val,
                         "history": history,
+                        # how long and where it trained, for the browser demo's spec table
+                        "max_iters": cfg["max_iters"],
+                        "minutes": elapsed / 60,
+                        "hardware": hardware,
                     },
                     os.path.join(args.out, "ckpt.pt"),
                 )

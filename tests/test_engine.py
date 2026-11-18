@@ -156,6 +156,9 @@ def test_export_builds_a_fused_page(tmp_path):
     for name in ["__WEIGHTS__", "__SAMPLE__", "__ENGINE__", "__TOKENIZER__"]:
         assert name not in page
     assert "function createTokenizer" in page and "function createGPT" in page
+    # the committed demo is what the exporter builds today, byte for byte
+    with open(os.path.join(ROOT, "docs", "index.html"), encoding="utf-8") as f:
+        assert page == f.read()
 
 
 def test_export_builds_a_bpe_page(tmp_path):
@@ -167,11 +170,16 @@ def test_export_builds_a_bpe_page(tmp_path):
     torch.save({"model": model.state_dict(), "model_config": config.__dict__, "tokenizer": tok.state(),
                 "step": 7, "val_loss": 5.0}, ckpt_path)
     out = tmp_path / "bpe.html"
-    subprocess.run([sys.executable, os.path.join(ROOT, "export_web.py"), "--ckpt", str(ckpt_path), "--out", str(out)],
-                   check=True, cwd=ROOT, capture_output=True)
+    data = tmp_path / "text.txt"
+    data.write_text(BPE_TEXT * 4, encoding="utf-8")
+    subprocess.run([sys.executable, os.path.join(ROOT, "export_web.py"), "--ckpt", str(ckpt_path), "--out", str(out),
+                    "--data", str(data)], check=True, cwd=ROOT, capture_output=True)
     page = out.read_text(encoding="utf-8")
     weights, sample = page_json(page, "weights"), page_json(page, "sample")
     assert weights["tokenizer"] == tok.state()
     assert weights["config"]["vocab_size"] == tok.vocab_size and weights["step"] == 7
     assert sample["prompt"] == "ROMEO:\n" and isinstance(sample["text"], str)
     assert "__TOKENIZER__" not in page and "__ENGINE__" not in page
+    # the wording is for tokens, with bits per character measured on the --data text
+    assert '<main class="tokens">' in page and "Next token" in page
+    assert "<dt>Bits per character</dt>" in page and "{{" not in page

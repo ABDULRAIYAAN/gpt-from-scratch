@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tiny Shakespeare GPT</title>
-<meta name="description" content="A small GPT language model built from scratch in PyTorch and trained on Shakespeare's plays. It runs in your browser and shows its next-character guesses and attention as it writes.">
+<meta name="description" content="A small GPT language model built from scratch in PyTorch and trained on Shakespeare's plays. It runs in your browser and shows its next-{{unit}} guesses and attention as it writes.">
 <meta name="author" content="Abdul Raiyaan">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Tiny Shakespeare GPT">
@@ -107,6 +107,12 @@ input[type="range"] { width: 100%; accent-color: var(--brass); }
 .cell.empty { color: transparent; }
 .cell.nl, .cell.sp { color: var(--stone-dim); }
 .cell.latest { box-shadow: inset 0 0 0 1px var(--stone-dim); }
+/* BPE pages: tokens are several characters wide, so the attention strip flows like text
+   instead of a 16-column grid, and only shows the tokens actually in the window. */
+main.tokens .lens { display: flex; flex-wrap: wrap; gap: 2px; }
+main.tokens .cell { aspect-ratio: auto; height: 20px; min-width: 14px; padding: 0 3px; white-space: pre; }
+main.tokens .cell.empty { display: none; }
+main.tokens .cand { grid-template-columns: 96px 1fr 46px; }
 .scale { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--stone-dim); }
 .scale i { flex: 0 0 90px; height: 6px; border-radius: 3px; background: linear-gradient(90deg, rgba(201,163,90,0.05), rgba(201,163,90,0.9)); }
 
@@ -133,10 +139,10 @@ footer { border-top: 1px solid var(--rule); padding-top: 18px; display: flex; ju
   <header>
     <span class="kicker">A Transformer language model, built from scratch</span>
     <h1>Tiny Shakespeare GPT</h1>
-    <p class="lede">Give it the start of a scene and it writes the rest, one character at a time. Watch which letters it is weighing up, and which earlier characters it is paying attention to, or pick the next letter yourself. The model runs on your device, so nothing you type leaves this page.</p>
+    <p class="lede">{{lede}} The model runs on your device, so nothing you type leaves this page.</p>
   </header>
 
-  <main>
+  <main{{main_attr}}>
     <form class="controls" id="controls" autocomplete="off">
       <div class="field">
         <label class="label" for="prompt">Opening lines</label>
@@ -179,7 +185,7 @@ footer { border-top: 1px solid var(--rule); padding-top: 18px; display: flex; ju
 
       <div class="actions">
         <button type="submit" class="write" id="write">Write the scene</button>
-        <button type="button" id="one">Next letter</button>
+        <button type="button" id="one">{{next_button}}</button>
         <button type="button" id="stop" disabled>Stop</button>
         <button type="button" id="copy">Copy text</button>
         <button type="button" id="clear">Start over</button>
@@ -198,12 +204,12 @@ footer { border-top: 1px solid var(--rule); padding-top: 18px; display: flex; ju
     <aside class="notes" aria-label="What the model is doing">
       <section class="panel">
         <h2>What comes next?</h2>
-        <p class="sub" id="cand-sub">The model's top guesses for the next character, at temperature 0.8. Click one to choose it yourself.</p>
+        <p class="sub" id="cand-sub">The model's top guesses for the next {{unit}}, at temperature 0.8. Click one to choose it yourself.</p>
         <div class="cands" id="cands"></div>
       </section>
       <section class="panel">
         <h2>Where it is looking</h2>
-        <p class="sub">The 64 characters it can see. Brighter means it paid more attention to that character for this guess, averaged over all 16 attention heads.</p>
+        <p class="sub">{{lens_sub}}</p>
         <div class="lens" id="lens" aria-hidden="true"></div>
         <div class="scale"><span>less</span><i></i><span>more</span></div>
       </section>
@@ -213,28 +219,22 @@ footer { border-top: 1px solid var(--rule); padding-top: 18px; display: flex; ju
   <section class="about">
     <div>
       <h2>Is it like ChatGPT?</h2>
-      <p>No. It uses the same core idea, a Transformer that predicts what comes next, but it is about 214,000 times smaller than GPT-3 and only ever read Shakespeare. It was never taught to chat, so it treats a question as the start of a script. Try "Ask a question" to see.</p>
+      <p>No. It uses the same core idea, a Transformer that predicts what comes next, but it is about {{gpt3_ratio}} times smaller than GPT-3 and only ever read Shakespeare. It was never taught to chat, so it treats a question as the start of a script. Try "Ask a question" to see.</p>
       <ul>
         <li><strong>Can:</strong> keep the format of a play, invent speakers, spell most words, keep the rhythm of verse.</li>
-        <li><strong>Cannot:</strong> answer questions, follow instructions, write about a topic you choose, make sense across lines, or remember more than 64 characters.</li>
-        <li><strong>Only knows 65 characters:</strong> most digits, symbols like @ # + / and emoji are dropped.</li>
+        <li><strong>Cannot:</strong> answer questions, follow instructions, write about a topic you choose, make sense across lines, or remember more than {{memory}}.</li>
+        <li>{{vocab_note}}</li>
       </ul>
     </div>
     <div>
       <h2>How it writes</h2>
-      <p>Each step, the model looks at the last 64 characters and scores all 65 characters it knows. Softmax turns the scores into the probabilities in the bars, and it picks one at random in proportion to them.</p>
-      <p>Inside, four Transformer blocks let every character attend to the characters before it. The attention strip shows where it looked for the current guess. It has no idea what any word means, so it writes things that sound right but rarely make sense.</p>
+      <p>{{each_step}} Softmax turns the scores into the probabilities in the bars, and it picks one at random in proportion to them.</p>
+      <p>Inside, {{n_blocks}} Transformer blocks let every {{unit}} attend to the {{unit}}s before it. The attention strip shows where it looked for the current guess. It has no idea what any word means, so it writes things that sound right but rarely make sense.</p>
     </div>
     <div>
       <h2>The model</h2>
       <dl class="specs">
-        <dt>Parameters</dt><dd>816,705</dd>
-        <dt>Architecture</dt><dd>4 layers, 4 heads, 128-wide</dd>
-        <dt>Context</dt><dd>64 characters</dd>
-        <dt>Vocabulary</dt><dd>65 characters</dd>
-        <dt>Training text</dt><dd>1.1M characters</dd>
-        <dt>Training</dt><dd>5,000 steps, 10 min, 2-core CPU</dd>
-        <dt>Validation loss</dt><dd>1.60 (bigram 2.49)</dd>
+{{specs}}
         <dt>Saved at</dt><dd id="ckpt-step">step 4,500</dd>
       </dl>
     </div>
@@ -401,7 +401,7 @@ __ENGINE__
   $('temp').addEventListener('input', e => {
     const t = Number(e.target.value).toFixed(1);
     $('temp-out').textContent = t;
-    $('cand-sub').textContent = 'The model’s top guesses for the next character, at temperature ' + t + '. Click one to choose it yourself.';
+    $('cand-sub').textContent = 'The model’s top guesses for the next {{unit}}, at temperature ' + t + '. Click one to choose it yourself.';
     if (!running) renderNotes(-1);
   });
   $('copy').addEventListener('click', async () => {

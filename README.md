@@ -97,11 +97,15 @@ python export_web.py                # rebuild docs/index.html from checkpoints/c
 python export_web.py --ckpt checkpoints/bpe/ckpt.pt --out docs/bpe.html   # the same page for a BPE model
 ```
 
-The exporter stores the checkpoint's tokenizer in the page next to the weights, and `web/engine.js` rebuilds it with `web/tokenizer.js`, so character and BPE checkpoints both run in the browser. The page labels guesses and attention cells with each token's text (` the` shows as `·the`) and writes generated tokens through a streaming decoder, so a character split across two byte-level tokens never shows up as U+FFFD. The page's wording still describes the character model.
+The exporter stores the checkpoint's tokenizer in the page next to the weights, and `web/engine.js` rebuilds it with `web/tokenizer.js`, so character and BPE checkpoints both run in the browser. The page labels guesses and attention cells with each token's text (` the` shows as `·the`) and writes generated tokens through a streaming decoder, so a character split across two byte-level tokens never shows up as U+FFFD.
+
+The page's wording and spec table come from the checkpoint too (`page_text` in `export_web.py`). A BPE page talks about tokens instead of characters, gives its context window in characters as well as tokens, and shows its bits per character, measured on the validation split when it exports (`--data` points at the training text). Its attention strip flows like text, so a long token such as `·Gloucester` gets a wide cell instead of being cut off. The training row is built from what `train.py` saves (steps, minutes and hardware), or set it with `--training "5,000 steps, 10 min, 2-core CPU"`.
+
+[`docs/bpe.html`](docs/bpe.html) is the BPE model from the comparison above (512 tokens, 931,584 parameters), built this way. Its checkpoint isn't in git, so to rebuild it, train it first with `python train.py --config small --tokenizer bpe --max-iters 5000 --eval-interval 500 --out checkpoints/bpe`.
 
 Checkpoints saved before the attention heads were batched (one key/query/value layer per head) still load: `GPT.load_state_dict` converts them to the fused layout, and `web/engine.js` accepts either layout.
 
-`docs/index.html` is a single static file with the weights embedded, so it can be opened locally or served with GitHub Pages.
+`docs/index.html` and `docs/bpe.html` are single static files with the weights embedded, so they can be opened locally or served with GitHub Pages.
 
 ### Tests
 
@@ -110,7 +114,7 @@ pip install pytest
 python -m pytest tests
 ```
 
-The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that `checkpoints/ckpt.pt` still loads, that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint, and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
+The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that `checkpoints/ckpt.pt` still loads, that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint that talks about tokens (and rebuilds the committed `docs/index.html` byte for byte, with its character wording unchanged), and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
 
 ## How it works
 
@@ -133,6 +137,7 @@ characters -> token embedding + position embedding
 | `GPT` | `model.py` | Embeddings, four blocks, output head, and `generate()` with temperature and top-k sampling |
 | `total_nll`, `evaluate_text` | `evaluate.py` | Slides the context window over the whole validation split, adds up -log p of every token once, and divides by the number of characters to get bits per character |
 | Browser engine | `web/engine.js` | The same forward pass in JavaScript, with a key/value cache; builds the checkpoint's tokenizer from the state the page embeds |
+| `page_text` | `export_web.py` | Fills the demo page's wording and spec table from the checkpoint: characters or tokens, context in characters, parameters, training run, loss and bits per character |
 | Browser tokenizers | `web/tokenizer.js` | Both tokenizers in JavaScript, built from the state a checkpoint saves; the chunk pattern spells out Python's whitespace set so the ids match exactly |
 
 ### Hyperparameters
@@ -176,6 +181,7 @@ gpt-from-scratch/
 │   └── template.html     browser demo page
 ├── docs/
 │   ├── index.html        built browser demo (static, weights embedded)
+│   ├── bpe.html          the same demo running the BPE model
 │   └── DEVLOG.md         what changed and why, build by build
 ├── tests/                pytest tests for the model, tokenizers, checkpoint loading and the JS engine
 ├── checkpoints/ckpt.pt   trained small model
@@ -192,11 +198,12 @@ gpt-from-scratch/
 - [ ] Replace the character tokenizer with BPE
   - [x] Byte-level BPE tokenizer written from scratch, usable with `train.py --tokenizer bpe`
   - [x] Train a BPE model and compare it with the character model in bits per character (2.18 vs 2.33)
-  - [ ] Port the BPE tokenizer to the browser demo
+  - [x] Port the BPE tokenizer to the browser demo
     - [x] BPE and character tokenizers in JavaScript (`web/tokenizer.js`), matching Python id for id
-    - [ ] Export a BPE checkpoint to the page and show tokens instead of characters in the demo
+    - [x] Export a BPE checkpoint to the page and show tokens instead of characters in the demo
       - [x] `export_web.py` and `web/engine.js` accept BPE checkpoints; the page labels tokens and streams multi-byte characters correctly
-      - [ ] Publish a BPE page, with wording and an attention strip sized for multi-character tokens
+      - [x] Publish a BPE page (`docs/bpe.html`), with wording and an attention strip sized for multi-character tokens
+  - [ ] Run BPE checkpoints in the Gradio app (`app.py` is still character-level)
 - [ ] Train on a different dataset, such as Malay text
 
 ## Acknowledgements
