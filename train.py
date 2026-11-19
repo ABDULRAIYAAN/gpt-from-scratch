@@ -140,7 +140,7 @@ def main():
                         "model": model.state_dict(),
                         "model_config": asdict(model_cfg),
                         "tokenizer": tok.state(),
-                        # app.py and export_web.py read the character list directly
+                        # the character list on its own too, as checkpoints from before BPE support stored it
                         **({"chars": tok.chars} if args.tokenizer == "char" else {}),
                         "step": it,
                         "val_loss": best_val,

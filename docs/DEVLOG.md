@@ -1,5 +1,19 @@
 # Devlog
 
+## 2026-11-19: BPE checkpoints in the Gradio app
+
+**What changed.** `app.py` was the last part of the project that only worked with the character model: it built a `CharTokenizer` from the checkpoint by hand and looked up `tok.itos` for each new token. Now it takes `--ckpt` (or the `GPT_CKPT` environment variable, which is easier to set on a Hugging Face Space), rebuilds the tokenizer with `load_tokenizer`, and works the same with either kind of checkpoint. The page's blurb is worked out from the loaded model, so a BPE model says "one token at a time" and gives its own parameter count.
+
+**Streaming text a token at a time.** A byte-level BPE token can be half of a character. An emoji is 4 bytes, and with only 512 tokens its bytes usually land in separate tokens, so decoding each token on its own would show U+FFFD for a moment. Both tokenizers now have `decoder()`, the Python version of the streaming decoder `web/tokenizer.js` already had. `push(id)` returns only the characters that are complete, holding back any unfinished bytes (it uses Python's incremental UTF-8 decoder), and `flush()` returns what is left at the end. Joined together, the output is exactly `decode(ids)`, even for broken byte sequences.
+
+**Length in characters.** The slider still says "Length (characters)", and it now means that for both models: the loop keeps sampling until enough characters have been written, rather than a fixed number of tokens. The page gets an update every 8 new characters, as before. Prompt cleaning depends on the tokenizer: the character model drops characters it doesn't know, the BPE model reads bytes and keeps the prompt as typed.
+
+**Checking it.** The BPE checkpoint behind `docs/bpe.html` isn't committed, so I trained a short one (`--tokenizer bpe --max-iters 600`, 1.4 minutes, validation loss 3.28 per token) just to run the app. Served through Gradio and called with `gradio_client`, a 300-character request with a rose emoji in the prompt came back in 34 updates, with exactly 300 new characters and no U+FFFD. For 600 characters from `ROMEO:\n`, that BPE model took 316 sampling steps against 600 for the character model (0.6 s against 1.1 s on the 2-core CPU, though the two models aren't the same size). With the default checkpoint the app still writes exactly what the old loop wrote for the same seed.
+
+**Tests.** New `tests/test_app.py`: the app module imports without Gradio, since Gradio is only imported when the page is built; prompt cleaning for both tokenizers; the streaming decoder gives exactly `decode(ids)` for 300 random id sequences per tokenizer; an emoji pushed as four separate byte tokens comes out as three empty strings and then the whole emoji; the character app gives the same text as the old loop for a fixed seed, with an update every 8 characters; a BPE model's output is the prompt plus `decode()` of the sampled tokens; and the blurb matches the model. 84 tests pass.
+
+**Next.** Every BPE sub-step on the roadmap is now done. The next roadmap item that fits a CPU is training on a different dataset.
+
 ## 2026-11-18: A BPE version of the demo page
 
 **What changed.** The page's text used to be written for the character model, and yesterday's BPE page still said "65 characters", "next character" and "the 64 characters it can see". Now `export_web.py` writes the wording from the checkpoint. `web/template.html` has `{{placeholders}}` for every sentence that depends on the model, and `page_text()` fills them: the lede, the "Next letter" button (now "Next token" for BPE), the guesses and attention captions, the about section and the whole spec table. The parameter count, layers, heads, width and the "N times smaller than GPT-3" figure are all worked out from the model, so they can't go stale. The placeholders are filled before the scripts and weights go in, and the export fails if one is left unfilled.

@@ -12,8 +12,28 @@ end up as single tokens, so the same text needs fewer tokens and the model's
 context window covers more of it.
 """
 
+import codecs
 import re
 from collections import Counter
+
+
+class StreamDecoder:
+    """Turns ids into text one at a time, for text that is written token by token.
+
+    push(id) returns the characters that are complete so far; flush() returns whatever is
+    left at the end (U+FFFD for an unfinished multi-byte character). Joined together they
+    are exactly tokenizer.decode(ids).
+    """
+
+    def __init__(self, to_bytes):
+        self._to_bytes = to_bytes  # id -> the bytes of that token
+        self._utf8 = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+    def push(self, i: int) -> str:
+        return self._utf8.decode(self._to_bytes(i))
+
+    def flush(self) -> str:
+        return self._utf8.decode(b"", final=True)
 
 
 class CharTokenizer:
@@ -38,6 +58,10 @@ class CharTokenizer:
 
     def decode(self, ids: list[int]) -> str:
         return "".join(self.itos[i] for i in ids)
+
+    def decoder(self) -> StreamDecoder:
+        # Every id is a whole character, so nothing is ever held back.
+        return StreamDecoder(lambda i: self.itos[i].encode("utf-8"))
 
     def state(self) -> dict:
         return {"type": "char", "chars": self.chars}
@@ -130,6 +154,11 @@ class BPETokenizer:
     def decode(self, ids: list[int]) -> str:
         # A slice of tokens can end partway through a multi-byte character; show U+FFFD for it.
         return b"".join(self.vocab[i] for i in ids).decode("utf-8", errors="replace")
+
+    def decoder(self) -> StreamDecoder:
+        # A token can be part of a multi-byte character (an emoji is 4 bytes, and its bytes
+        # may land in different tokens), so unfinished bytes are held back until the rest arrive.
+        return StreamDecoder(lambda i: self.vocab[i])
 
     def state(self) -> dict:
         return {"type": "bpe", "merges": [list(m) for m in self.merges]}
