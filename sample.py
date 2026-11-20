@@ -4,6 +4,7 @@ Generate text from a trained checkpoint.
 Usage:
     python sample.py
     python sample.py --prompt "ROMEO:" --tokens 500 --temperature 0.8
+    python sample.py --tokens 5000 --kv-cache    # faster: reuse keys and values between steps
 """
 
 import argparse
@@ -23,6 +24,8 @@ def main():
     p.add_argument("--temperature", type=float, default=1.0, help="<1 = safer, >1 = wilder")
     p.add_argument("--top-k", type=int, default=None)
     p.add_argument("--num-samples", type=int, default=1)
+    p.add_argument("--kv-cache", action="store_true",
+                   help="reuse keys and values between steps; once the window fills, context drops to half of it")
     p.add_argument("--device", default="auto")
     p.add_argument("--seed", type=int, default=None)
     args = p.parse_args()
@@ -40,7 +43,8 @@ def main():
 
     idx = torch.tensor([tok.encode(args.prompt)], dtype=torch.long, device=device)
     for i in range(args.num_samples):
-        out = model.generate(idx, args.tokens, temperature=args.temperature, top_k=args.top_k)
+        out = model.generate(idx, args.tokens, temperature=args.temperature, top_k=args.top_k,
+                             use_cache=args.kv_cache)
         print(tok.decode(out[0].tolist()))
         if i < args.num_samples - 1:
             print("\n" + "-" * 40 + "\n")

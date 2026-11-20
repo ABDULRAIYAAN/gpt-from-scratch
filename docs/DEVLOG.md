@@ -1,5 +1,24 @@
 # Devlog
 
+## 2026-11-20: A key/value cache for generate()
+
+**What changed.** `generate()` used to run the whole context window through the model for every new token, even though only the last token is new. A token's key and value never change once computed, because it only attends to itself and the tokens before it, so they can be kept. New `KVCache` in `model.py` stores every layer's keys and values, shape `(B, nh, t, H)`, and `forward()` takes an optional `cache`: the new tokens get positions after the cached ones, their keys and values are appended, and the causal mask uses rows `P..P+T-1` so they can see the cached positions. `generate(use_cache=True)` then feeds one token per step through `next_logits()`. `sample.py --kv-cache` turns it on. It is off by default, so `train.py`, `export_web.py` and `app.py` sample exactly as before, and the rebuilt `docs/index.html` is byte for byte the same.
+
+**When the window fills.** The position embeddings are absolute, so the cache can't slide: dropping the oldest token would move every other token to a new position and change all their keys. Rerunning the full window each step would bring back the cost the cache is meant to remove. So when the cache is full, `next_logits()` rebuilds it from the newest half of the window, the same rule `web/engine.js` already used. The model then sees between 32 and 64 tokens instead of always 64, and samples past the first window are different from the uncached ones. I checked what that costs with `evaluate.py`: the half-window rule is the same as windows that start every 33 tokens, and `--stride 33` gives 2.272 bits per character on the validation split, against 2.281 for `--stride 1` (always a full 64-token window). So the shorter context doesn't hurt this model at all, and is even slightly better.
+
+**Speed (2-core CPU, 1,000 tokens from a newline, best of 3).**
+
+| | No cache | Cache | Speedup |
+|---|---|---|---|
+| `small` (committed checkpoint, 64-token window) | 1.70 ms/token | 0.78 ms/token | 2.2x |
+| `full` architecture (random weights, 256-token window) | 28.9 ms/token | 3.2 ms/token | 9.2x |
+
+The `full` numbers use random weights, since there is no trained full checkpoint yet, but the speed doesn't depend on the weights. The longer window is why the gain is so much bigger there.
+
+**Tests.** New `tests/test_kv_cache.py`: feeding a window in pieces through the cache gives the same logits as one forward pass; the cache refuses to grow past `block_size`; `generate(use_cache=True)` gives exactly the same tokens as before while the window has room, with and without top-k; past the window, every step's logits equal a plain forward pass over the context the half-window rule picks, including a prompt longer than the window; long cached samples equal sampling from that rule by hand; the trained checkpoint writes the same first window of text with and without the cache; and `sample.py --kv-cache` runs. One test streams 30 tokens through both the PyTorch cache and a browser engine session and checks the probabilities match after every token, through two rebuilds of the window, so the two implementations can't drift apart. Getting the mask offset wrong, or keeping one token more than half the window, makes several of them fail, which I checked by making each change. 93 tests pass.
+
+**Next.** `app.py` still calls `generate(idx, 1)` once per token, which reruns the whole window every time. Moving it onto `next_logits()` would make the Gradio app faster too, though its samples past the first window would change.
+
 ## 2026-11-19: BPE checkpoints in the Gradio app
 
 **What changed.** `app.py` was the last part of the project that only worked with the character model: it built a `CharTokenizer` from the checkpoint by hand and looked up `tok.itos` for each new token. Now it takes `--ckpt` (or the `GPT_CKPT` environment variable, which is easier to set on a Hugging Face Space), rebuilds the tokenizer with `load_tokenizer`, and works the same with either kind of checkpoint. The page's blurb is worked out from the loaded model, so a BPE model says "one token at a time" and gives its own parameter count.

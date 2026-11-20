@@ -43,7 +43,8 @@ class MultiHeadAttention(nn.Module):
         self.proj = nn.Linear(head_size * config.n_head, config.n_embd)
         self.dropout = nn.Dropout(config.dropout)
 
-    def forward(self, x):
+    def forward(self, x, cache=None, layer=0):
+        assert cache is None, "the per-head reference has no key/value cache"
         return self.dropout(self.proj(torch.cat([h(x) for h in self.heads], dim=-1)))
 
 

@@ -34,16 +34,18 @@ def fp16_model(config, seed):
     return model
 
 
-def run_engine(blob, seqs, tmp_path, texts=()):
-    """Everything run_engine.js reports, with the logits as a tensor."""
+def run_engine(blob, seqs, tmp_path, texts=(), streams=()):
+    """Everything run_engine.js reports, with the logits (and session probabilities) as tensors."""
     path = tmp_path / "weights.json"
     path.write_text(json.dumps(blob))
     out = subprocess.run(
-        ["node", os.path.join(HERE, "run_engine.js"), str(path), json.dumps(seqs), json.dumps(list(texts))],
+        ["node", os.path.join(HERE, "run_engine.js"), str(path), json.dumps(seqs), json.dumps(list(texts)),
+         json.dumps(list(streams))],
         check=True, capture_output=True, text=True,
     )
     res = json.loads(out.stdout)
     res["logits"] = torch.tensor(res["logits"])
+    res["sessionProbs"] = [torch.tensor(p) for p in res["sessionProbs"]]
     return res
 
 

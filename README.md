@@ -69,6 +69,7 @@ python train.py --data my_text.txt --out checkpoints/mine            # train on 
 python train.py --config small --n-layer 6 --max-iters 8000          # override any hyperparameter
 python train.py --config small --tokenizer bpe --out checkpoints/bpe # byte-pair encoding instead of characters
 python sample.py --tokens 1000 --top-k 20 --num-samples 3
+python sample.py --tokens 5000 --kv-cache                             # key/value cache: 2-9x faster sampling on CPU
 python evaluate.py checkpoints/ckpt.pt checkpoints/bpe/ckpt.pt       # bits per character on the validation split
 ```
 
@@ -108,6 +109,8 @@ The page's wording and spec table come from the checkpoint too (`page_text` in `
 
 Checkpoints saved before the attention heads were batched (one key/query/value layer per head) still load: `GPT.load_state_dict` converts them to the fused layout, and `web/engine.js` accepts either layout.
 
+`--kv-cache` keeps each token's attention keys and values instead of rerunning the whole context window for every new token, so a step costs one position of compute. On a 2-core CPU, sampling 1,000 tokens went from 1.70 to 0.78 ms per token for the small model (2.2x) and from 28.9 to 3.2 ms for the `full` architecture (9.2x, random weights, since no full checkpoint is trained yet). The samples are exactly the same until the context window fills. After that, because the position embeddings are absolute, the cache can't slide along with the text, so it starts again from the newest half of the window, the same rule the browser engine uses. The model then sees 32 to 64 characters instead of always 64; on the validation split that scores 2.272 bits per character against 2.281 for the full sliding window, so the shorter context costs nothing on this model.
+
 `docs/index.html` and `docs/bpe.html` are single static files with the weights embedded, so they can be opened locally or served with GitHub Pages.
 
 ### Tests
@@ -117,7 +120,7 @@ pip install pytest
 python -m pytest tests
 ```
 
-The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that `checkpoints/ckpt.pt` still loads, that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint that talks about tokens (and rebuilds the committed `docs/index.html` byte for byte, with its character wording unchanged), and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
+The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that `checkpoints/ckpt.pt` still loads, that the key/value cache gives the same logits as a full forward pass (and the same window rule, step by step, as the browser engine), that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint that talks about tokens (and rebuilds the committed `docs/index.html` byte for byte, with its character wording unchanged), and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
 
 ## How it works
 
@@ -139,6 +142,7 @@ characters -> token embedding + position embedding
 | `FeedForward` | `model.py` | Per-character MLP with a 4x expansion and ReLU |
 | `Block` | `model.py` | Attention then feed-forward, each with pre-LayerNorm and a residual connection |
 | `GPT` | `model.py` | Embeddings, four blocks, output head, and `generate()` with temperature and top-k sampling |
+| `KVCache`, `next_logits` | `model.py` | Keeps every layer's keys and values for the tokens already in the window, so `generate(use_cache=True)` feeds one new token per step; when the window is full it rebuilds the cache from the newest half, like the browser engine |
 | `total_nll`, `evaluate_text` | `evaluate.py` | Slides the context window over the whole validation split, adds up -log p of every token once, and divides by the number of characters to get bits per character |
 | `write` | `app.py` | The Gradio app's loop: samples one token at a time from any checkpoint and streams the text to the page until the requested number of characters is written |
 | Browser engine | `web/engine.js` | The same forward pass in JavaScript, with a key/value cache; builds the checkpoint's tokenizer from the state the page embeds |
@@ -171,12 +175,12 @@ Models like ChatGPT use the same core architecture at a far larger scale, with s
 
 ```
 gpt-from-scratch/
-├── model.py              GPT architecture
+├── model.py              GPT architecture and key/value cache
 ├── tokenizer.py          character-level and BPE tokenizers
 ├── data.py               dataset download, batching, device selection
 ├── bigram.py             baseline model
 ├── train.py              training loop, evaluation, checkpointing
-├── sample.py             text generation from a checkpoint
+├── sample.py             text generation from a checkpoint (optionally with the key/value cache)
 ├── evaluate.py           bits per character on the full validation split
 ├── app.py                Gradio web app for character or BPE checkpoints (local or Hugging Face Spaces)
 ├── export_web.py         builds the browser demo from a checkpoint
@@ -210,6 +214,7 @@ gpt-from-scratch/
       - [x] Publish a BPE page (`docs/bpe.html`), with wording and an attention strip sized for multi-character tokens
   - [x] Run BPE checkpoints in the Gradio app (`app.py --ckpt`, with a streaming decoder for split characters)
 - [ ] Train on a different dataset, such as Malay text
+- [x] Key/value cache for `generate()` in PyTorch (`sample.py --kv-cache`)
 
 ## Acknowledgements
 
