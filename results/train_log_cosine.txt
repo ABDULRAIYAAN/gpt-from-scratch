@@ -1,0 +1,45 @@
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+lr schedule: cosine (peak 0.001, 100 warmup steps, final 0.0001) | grad clip: off
+step     0 | train loss 4.2215 | val loss 4.2221 | 0.0 min
+step   500 | train loss 1.8893 | val loss 1.9848 | 1.3 min | lr 9.85e-04 | grad norm 1.14
+step  1000 | train loss 1.6833 | val loss 1.8190 | 2.5 min | lr 9.27e-04 | grad norm 1.12
+step  1500 | train loss 1.5899 | val loss 1.7491 | 3.7 min | lr 8.31e-04 | grad norm 1.05
+step  2000 | train loss 1.5343 | val loss 1.7039 | 4.8 min | lr 7.06e-04 | grad norm 1.01
+step  2500 | train loss 1.4833 | val loss 1.6765 | 6.0 min | lr 5.65e-04 | grad norm 1.00
+step  3000 | train loss 1.4415 | val loss 1.6330 | 7.1 min | lr 4.22e-04 | grad norm 1.00
+step  3500 | train loss 1.4165 | val loss 1.6120 | 8.2 min | lr 2.93e-04 | grad norm 1.01
+step  4000 | train loss 1.3890 | val loss 1.5824 | 9.4 min | lr 1.89e-04 | grad norm 1.02
+step  4500 | train loss 1.3766 | val loss 1.5650 | 10.5 min | lr 1.23e-04 | grad norm 1.04
+step  5000 | train loss 1.3630 | val loss 1.5846 | 11.7 min | lr 1.00e-04 | grad norm 1.05
+
+done in 11.7 min | best val loss 1.5650
+checkpoint saved to checkpoints/cosine/ckpt.pt
+
+--- sample ---
+
+DORCAS:
+Only will mock to have speak a furarder of day
+For too my makes on the Lord; it is heres
+the people to of ballaw thee is importial.
+
+DUKE VINCENTIO:
+Ay, looks art at their huntress of again;
+And his good cident round or and heart!
+
+GLOUCESTER:
+The good sair-crowns, alaw to me. What art you are
+Becomes?
+
+DORSET:
+Have you curged in his ears love, his instal hath
+Out would you did fellowing fellower winding upon with his heart
+to love burthousand with an execution will.
+
+CORIOLANUS:
+Ay, my lord;
+Go, good room is one cheaping in the cooks.
+
+First Citizen:
+We have. What where I was not, fr

@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-11-21: Learning-rate warmup, cosine decay and gradient clipping
+
+**What changed.** `train.py` has always used the same learning rate for every step. New `get_lr()` gives the rate for each step, and `--lr-schedule cosine` turns on a linear warmup over `--warmup-iters` steps (100 by default, starting at 1/100 of the peak rather than 0) followed by half a cosine down to `--min-lr` (a tenth of the peak by default) at the last step. `--grad-clip N` calls `clip_grad_norm_` before each AdamW step, which scales every gradient by the same factor so their combined norm is at most N. Both are off by default, and I checked the default path is unchanged: 500 steps of the `small` config give exactly the same losses before and after the change (val 1.9976 at step 500). The progress lines now also show the average gradient norm since the last eval, plus the learning rate when a schedule is on, and the checkpoint records the settings it was trained with.
+
+**Measuring it.** The committed checkpoint isn't a fair baseline any more: batching the attention heads changed the random starting weights, so I retrained with a constant rate first. Three runs of the `small` config, 5,000 steps, eval every 500, same seed, one after another on the 2-core CPU, then `evaluate.py` over the full validation split:
+
+| | Constant 1e-3 | Warmup + cosine | Warmup + cosine, clip 1.0 |
+|---|---|---|---|
+| Best estimated val loss (step 4500) | 1.6101 | 1.5650 | 1.5635 |
+| Loss per character, full split | 1.6225 | 1.5756 | 1.5755 |
+| Bits per character | 2.341 | 2.273 | 2.273 |
+| Time | 12.0 min | 11.7 min | 11.7 min |
+
+So the schedule is worth 2.9% fewer bits per character at no extra cost. For comparison, that is a bit under half of what switching to BPE gained (6.4%). The cosine run is already a little ahead at step 500 (estimated val loss 1.985 against 1.998), and the gap widens as the rate falls, to 0.045 nats at step 4500. The train loss drops faster too, so the train/val gap at step 5000 is 0.22 nats against 0.21, about the same.
+
+Clipping did nothing measurable. The average gradient norm per 500 steps stayed between 0.96 and 1.14 in that run, so a limit of 1.0 only trims ordinary steps a little, and the estimated val losses stay within 0.013 of the unclipped run at every eval and end up the same on the full split. It is still there as an option for bigger configs or higher learning rates, where it is more likely to matter, but I have no measurement of that yet.
+
+**Tests.** New `tests/test_train.py`: the constant schedule returns the same rate for all 5,000 steps; warmup starts at `lr / warmup_iters` and climbs in equal steps to the peak; the decay has no jump where warmup ends, never goes up, is halfway between peak and floor at its midpoint, matches the formula at an arbitrary step and ends exactly at `min_lr`; the default floor is a tenth of the peak, steps past the end stay at the floor, and an unknown schedule is an error; and a tiny `train.py` run with `--lr-schedule cosine --warmup-iters 2 --grad-clip 0.5` finishes, prints the rate and gradient norm, and saves the settings in its checkpoint. 98 tests pass.
+
+**Next.** Retrain the committed small model with the cosine schedule and rebuild `docs/index.html` from it. That will change the demo's sample and spec table, so it is its own change.
+
 ## 2026-11-20: A key/value cache for generate()
 
 **What changed.** `generate()` used to run the whole context window through the model for every new token, even though only the last token is new. A token's key and value never change once computed, because it only attends to itself and the tokens before it, so they can be kept. New `KVCache` in `model.py` stores every layer's keys and values, shape `(B, nh, t, H)`, and `forward()` takes an optional `cache`: the new tokens get positions after the cached ones, their keys and values are appended, and the causal mask uses rows `P..P+T-1` so they can see the cached positions. `generate(use_cache=True)` then feeds one token per step through `next_logits()`. `sample.py --kv-cache` turns it on. It is off by default, so `train.py`, `export_web.py` and `app.py` sample exactly as before, and the rebuilt `docs/index.html` is byte for byte the same.

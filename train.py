@@ -7,6 +7,7 @@ Usage:
     python train.py --data my_text.txt   # train on your own text
     python train.py --config small --tokenizer bpe --bpe-vocab-size 512   # subword tokens
     python train.py --max-iters 2000 --device cuda
+    python train.py --config small --lr-schedule cosine --grad-clip 1.0   # warmup, cosine decay, clipping
 """
 
 import argparse
@@ -44,10 +45,45 @@ def parse_args():
     p.add_argument("--tokenizer", choices=["char", "bpe"], default="char",
                    help="char: one token per character; bpe: byte-pair encoding learned from the data")
     p.add_argument("--bpe-vocab-size", type=int, default=512, help="vocabulary size for --tokenizer bpe")
+    p.add_argument("--lr-schedule", choices=["constant", "cosine"], default="constant",
+                   help="constant: the same learning rate every step; cosine: linear warmup, then cosine decay")
+    p.add_argument("--warmup-iters", type=int, default=100,
+                   help="steps of linear warmup for --lr-schedule cosine")
+    p.add_argument("--min-lr", type=float, default=None,
+                   help="learning rate at the last step for --lr-schedule cosine (default: learning rate / 10)")
+    p.add_argument("--grad-clip", type=float, default=0.0,
+                   help="clip the gradient's global norm to this value before each step (0 = off)")
     # Any preset value can be overridden from the command line.
     for k, v in PRESETS["full"].items():
         p.add_argument(f"--{k.replace('_', '-')}", type=type(v), default=None)
     return p.parse_args()
+
+
+def get_lr(it, max_iters, learning_rate, schedule="constant", warmup_iters=100, min_lr=None):
+    """Learning rate for training step `it` (0 .. max_iters - 1).
+
+    "constant" returns learning_rate every step, which is how the committed checkpoint was trained.
+    "cosine" ramps up linearly over the first warmup_iters steps (from learning_rate / warmup_iters
+    to learning_rate), then follows half a cosine down to min_lr at the last step:
+
+        lr = min_lr + 0.5 * (1 + cos(pi * progress)) * (learning_rate - min_lr)
+
+    where progress goes from 0 just after warmup to 1 at step max_iters - 1. Warmup keeps the
+    first, largest updates from the randomly initialised model small while AdamW's running averages
+    settle; the decay takes smaller steps near the end, so the weights settle into a minimum
+    instead of bouncing around it.
+    """
+    if schedule == "constant":
+        return learning_rate
+    if schedule != "cosine":
+        raise ValueError(f"unknown learning-rate schedule {schedule!r}")
+    if min_lr is None:
+        min_lr = learning_rate / 10
+    if it < warmup_iters:
+        return learning_rate * (it + 1) / warmup_iters
+    decay_steps = max(1, max_iters - 1 - warmup_iters)
+    progress = min(1.0, (it - warmup_iters) / decay_steps)
+    return min_lr + 0.5 * (1.0 + math.cos(math.pi * progress)) * (learning_rate - min_lr)
 
 
 @torch.no_grad()
@@ -113,6 +149,14 @@ def main():
     print(f"random-guess loss would be ln({tok.vocab_size}) = {math.log(tok.vocab_size):.4f}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg["learning_rate"])
+    schedule = dict(schedule=args.lr_schedule, warmup_iters=args.warmup_iters, min_lr=args.min_lr)
+    if args.lr_schedule != "constant" or args.grad_clip > 0:
+        print(
+            f"lr schedule: {args.lr_schedule} (peak {cfg['learning_rate']:g}"
+            + (f", {args.warmup_iters} warmup steps, final {get_lr(cfg['max_iters'] - 1, cfg['max_iters'], cfg['learning_rate'], **schedule):g}"
+               if args.lr_schedule == "cosine" else "")
+            + f") | grad clip: {args.grad_clip if args.grad_clip > 0 else 'off'}"
+        )
 
     # ---- training loop ----
     if device == "cuda":
@@ -123,16 +167,23 @@ def main():
         hardware = device.upper()
     best_val = float("inf")
     history = []
+    grad_norms = []  # global gradient norm (before clipping) of each step since the last eval
     t0 = time.time()
     for it in range(cfg["max_iters"] + 1):
         if it % cfg["eval_interval"] == 0 or it == cfg["max_iters"]:
             losses = estimate_loss(model, splits, cfg, device)
             elapsed = time.time() - t0
+            extra = ""
+            if args.lr_schedule != "constant" and it > 0:
+                extra = f" | lr {optimizer.param_groups[0]['lr']:.2e}"  # the rate the last step used
+            if grad_norms:
+                extra += f" | grad norm {sum(grad_norms) / len(grad_norms):.2f}"
             print(
                 f"step {it:5d} | train loss {losses['train']:.4f} | "
-                f"val loss {losses['val']:.4f} | {elapsed / 60:.1f} min"
+                f"val loss {losses['val']:.4f} | {elapsed / 60:.1f} min{extra}"
             )
             history.append({"step": it, **losses})
+            grad_norms = []
             if losses["val"] < best_val:
                 best_val = losses["val"]
                 torch.save(
@@ -149,16 +200,32 @@ def main():
                         "max_iters": cfg["max_iters"],
                         "minutes": elapsed / 60,
                         "hardware": hardware,
+                        # the optimisation settings, so runs with different schedules can be told apart
+                        "learning_rate": cfg["learning_rate"],
+                        "lr_schedule": args.lr_schedule,
+                        "warmup_iters": args.warmup_iters if args.lr_schedule == "cosine" else 0,
+                        "grad_clip": args.grad_clip,
                     },
                     os.path.join(args.out, "ckpt.pt"),
                 )
             if it == cfg["max_iters"]:
                 break
 
+        for group in optimizer.param_groups:
+            group["lr"] = get_lr(it, cfg["max_iters"], cfg["learning_rate"], **schedule)
         xb, yb = get_batch(splits["train"], cfg["block_size"], cfg["batch_size"], device)
         _, loss = model(xb, yb)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
+        if args.grad_clip > 0:
+            # Rescale every gradient by the same factor so their combined L2 norm (all parameters
+            # flattened into one vector) is at most grad_clip; the direction is unchanged.
+            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+        else:
+            norm = torch.linalg.vector_norm(
+                torch.stack([torch.linalg.vector_norm(p.grad) for p in model.parameters() if p.grad is not None])
+            )
+        grad_norms.append(norm.item())
         optimizer.step()
 
     print(f"\ndone in {(time.time() - t0) / 60:.1f} min | best val loss {best_val:.4f}")

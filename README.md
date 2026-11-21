@@ -37,6 +37,18 @@ Loss per token can't be compared across tokenizers, because a BPE token is about
 
 The BPE model needs 6.4% fewer bits per character. Part of that comes from seeing about twice as much text in its 64-token window, and it also has 14% more parameters (its embedding and output layers are bigger). Its training log is in [`results/train_log_bpe.txt`](results/train_log_bpe.txt).
 
+### Learning-rate schedule
+
+`train.py --lr-schedule cosine` warms the learning rate up over the first 100 steps and then lowers it along a cosine curve to a tenth of its peak by the last step. Three runs of the `small` config with the current code, 5,000 steps each on a 2-core CPU, scored with `evaluate.py` on the full validation split:
+
+| Run | Learning rate | Grad clip | Loss/token | **Bits/char** | Training time |
+|---|---|---|---|---|---|
+| Constant (the default) | 1e-3 every step | off | 1.6225 | **2.341** | 12.0 min |
+| Warmup + cosine decay | 1e-5 -> 1e-3 -> 1e-4 | off | 1.5756 | **2.273** | 11.7 min |
+| Warmup + cosine decay, clipped | 1e-5 -> 1e-3 -> 1e-4 | 1.0 | 1.5755 | **2.273** | 11.7 min |
+
+The schedule takes 2.9% off the bits per character for the same number of steps and no extra compute. Clipping the gradient norm to 1.0 made no measurable difference here: the average norm before clipping stayed between 0.96 and 1.14 for the whole run, and the losses track the unclipped run closely at every eval. The cosine run's training log is in [`results/train_log_cosine.txt`](results/train_log_cosine.txt). (The committed checkpoint scores 2.327 with a constant rate; it was trained before the attention heads were batched, which changed the random starting weights, so the constant run above is the like-for-like baseline.)
+
 A sample from the small model, given the prompt `ROMEO:`:
 
 ```
@@ -68,6 +80,8 @@ python train.py --config full --device cuda --out checkpoints/full   # 10.8M-par
 python train.py --data my_text.txt --out checkpoints/mine            # train on your own text
 python train.py --config small --n-layer 6 --max-iters 8000          # override any hyperparameter
 python train.py --config small --tokenizer bpe --out checkpoints/bpe # byte-pair encoding instead of characters
+python train.py --config small --max-iters 5000 --lr-schedule cosine --out checkpoints/cosine   # warmup + cosine decay
+python train.py --config small --lr-schedule cosine --warmup-iters 200 --min-lr 5e-5 --grad-clip 1.0
 python sample.py --tokens 1000 --top-k 20 --num-samples 3
 python sample.py --tokens 5000 --kv-cache                             # key/value cache: 2-9x faster sampling on CPU
 python evaluate.py checkpoints/ckpt.pt checkpoints/bpe/ckpt.pt       # bits per character on the validation split
@@ -83,6 +97,8 @@ tok.decode(ids);                               // "ROMEO:\nWhat light"
 const d = tok.decoder();                       // for text written one token at a time:
 ids.map(id => d.push(id)).join("");            // holds back a character split across tokens
 ```
+
+`--lr-schedule cosine` ramps the learning rate up linearly for `--warmup-iters` steps (100 by default), then follows half a cosine from `--learning-rate` down to `--min-lr` (a tenth of it by default) at the last step. `--grad-clip N` rescales all the gradients together whenever their combined norm is above N. Both are off by default, so the default command trains exactly as before. With either one on, the progress lines also show the learning rate and the average gradient norm, and the checkpoint records the settings (`lr_schedule`, `warmup_iters`, `grad_clip`, `learning_rate`).
 
 `evaluate.py` takes any number of checkpoints and prints a table with loss per token, bits per token and bits per character on the full validation split (the last 10% of the text). `--stride 32` uses overlapping windows so every token after the first window gets at least 32 tokens of context; this lowers the numbers a little and takes twice as long.
 
@@ -120,7 +136,7 @@ pip install pytest
 python -m pytest tests
 ```
 
-The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that `checkpoints/ckpt.pt` still loads, that the key/value cache gives the same logits as a full forward pass (and the same window rule, step by step, as the browser engine), that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint that talks about tokens (and rebuilds the committed `docs/index.html` byte for byte, with its character wording unchanged), and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
+The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that the learning-rate schedule warms up, decays to its floor and stays constant when it is off (and that `train.py` runs end to end with it and gradient clipping), that `checkpoints/ckpt.pt` still loads, that the key/value cache gives the same logits as a full forward pass (and the same window rule, step by step, as the browser engine), that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint that talks about tokens (and rebuilds the committed `docs/index.html` byte for byte, with its character wording unchanged), and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
 
 ## How it works
 
@@ -138,6 +154,7 @@ characters -> token embedding + position embedding
 | `decoder()` | `tokenizer.py` | Streams generated ids as text: holds back the bytes of an unfinished multi-byte character, so text written token by token never shows a broken character; joined, its output is exactly `decode(ids)` |
 | `split_text` | `data.py` | First 90% of the characters for training, last 10% for validation, split before tokenizing so every tokenizer is validated on the same text |
 | `get_batch` | `data.py` | Samples random 64-character chunks; targets are the inputs shifted by one |
+| `get_lr` | `train.py` | The learning rate for each step: constant, or a linear warmup followed by a cosine decay to a tenth of the peak; the training loop can also clip the gradient norm before each AdamW step |
 | `MultiHeadAttention` | `model.py` | Causal self-attention with four 32-wide heads computed together: one `Linear(C, 3C)` makes every head's queries, keys and values, the heads become a batch axis, queries and keys score every earlier character (scaled by 1/sqrt(head_size)), a lower-triangular mask hides the future, softmax weights the values, and the heads are concatenated and projected |
 | `FeedForward` | `model.py` | Per-character MLP with a 4x expansion and ReLU |
 | `Block` | `model.py` | Attention then feed-forward, each with pre-LayerNorm and a residual connection |
@@ -159,6 +176,7 @@ characters -> token embedding + position embedding
 | Batch size | 32 | 64 |
 | Dropout | 0.1 | 0.2 |
 | Learning rate (AdamW) | 1e-3 | 3e-4 |
+| Schedule | constant (`--lr-schedule cosine` optional) | constant |
 | Steps | 5,000 | 5,000 |
 
 ## Limitations
@@ -179,7 +197,7 @@ gpt-from-scratch/
 ├── tokenizer.py          character-level and BPE tokenizers
 ├── data.py               dataset download, batching, device selection
 ├── bigram.py             baseline model
-├── train.py              training loop, evaluation, checkpointing
+├── train.py              training loop, learning-rate schedule, evaluation, checkpointing
 ├── sample.py             text generation from a checkpoint (optionally with the key/value cache)
 ├── evaluate.py           bits per character on the full validation split
 ├── app.py                Gradio web app for character or BPE checkpoints (local or Hugging Face Spaces)
@@ -215,6 +233,7 @@ gpt-from-scratch/
   - [x] Run BPE checkpoints in the Gradio app (`app.py --ckpt`, with a streaming decoder for split characters)
 - [ ] Train on a different dataset, such as Malay text
 - [x] Key/value cache for `generate()` in PyTorch (`sample.py --kv-cache`)
+- [x] Learning-rate warmup, cosine decay and gradient clipping (`train.py --lr-schedule cosine --grad-clip`; 2.273 vs 2.341 bits per character)
 
 ## Acknowledgements
 
