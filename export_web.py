@@ -49,6 +49,8 @@ def weights_blob(model: GPT, tokenizer: dict, step: int, val_loss: float) -> dic
     for k, v in model.state_dict().items():
         if k.endswith("tril"):  # the causal mask is rebuilt in JS, no need to ship it
             continue
+        if k == "lm_head.weight" and model.config.tie_weights:
+            continue  # the same matrix as token_embedding_table.weight; engine.js reuses that one
         a = v.detach().float().cpu().numpy().astype(np.float16)
         tensors[k] = {"shape": list(a.shape), "b64": base64.b64encode(a.tobytes()).decode()}
     return {

@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-11-22: Weight tying between the embedding and the output layer
+
+**What changed.** The token embedding (`token_embedding_table.weight`) and the output layer (`lm_head.weight`) are both `(vocab_size, C)` matrices: one turns token i into a vector, the other scores a vector against row i to predict token i. New `tie_weights` in `GPTConfig`, set with `train.py --tie-weights`, makes them the same tensor, the way GPT-2 does it. The output bias stays separate. Because the two uses share one tensor, backprop adds both gradients into it, so every row gets updated on every step through the output layer, not only the rows of tokens that appeared in the input. It saves `vocab_size * C` parameters: 8,320 for the character model (816,705 -> 808,385) and 65,536 for the 512-token BPE model (931,584 -> 866,048). `num_params()` already counted a shared tensor once, and AdamW gets it once too.
+
+**Everything else that loads a model.** The flag lives in the model config, so `sample.py`, `evaluate.py`, `app.py` and `export_web.py` rebuild a tied model from its checkpoint with no extra code, and `torch.save` stores the shared matrix once. The exporter leaves `lm_head.weight` out of the page for a tied model, and `web/engine.js` uses the embedding matrix when the output weight is missing, which made the page for the tied character model about 22 KB smaller (2.20 MB). It is off by default and old checkpoints have no `tie_weights` key, so `checkpoints/ckpt.pt` loads untied as before. The rebuilt `docs/index.html` changes in two places only, the new engine lines and `"tie_weights": false` in its config; the weights and the sample shown on load are identical.
+
+**Does it help? Not here.** I trained both tokenizers with tying and compared them against the untied runs already in the README, with the same seed and settings (characters with warmup + cosine decay, BPE with a constant rate), 5,000 steps on the 2-core CPU, then ran `evaluate.py` over the full validation split:
+
+| | Characters, separate | Characters, tied | BPE, separate | BPE, tied |
+|---|---|---|---|---|
+| Parameters | 816,705 | 808,385 | 931,584 | 866,048 |
+| Best estimated val loss | 1.5650 | 1.5711 | 2.8381 | 2.8476 |
+| Train loss at step 5000 | 1.3630 | 1.3705 | 2.3695 | 2.3886 |
+| Bits per character, full split | 2.273 | 2.283 | 2.177 | 2.184 |
+
+Both tied models are slightly worse, by 0.010 and 0.007 bits per character. The train loss is higher as well, so the tie isn't acting as a regulariser that closes the train/val gap; it just takes away a little capacity. That fits the usual explanation for why tying helps big models: with a 50k vocabulary the embedding is a large share of the parameters and most rows are rarely seen as inputs, so the extra gradient through the output layer matters. With 65 characters, every row is seen constantly and the matrix is 1% of the model. Even at 512 BPE tokens (7% of the model) it didn't pay off at 5,000 steps. Early in training the tied runs were clearly behind (val 2.052 against 1.985 at step 500 for characters) and then mostly caught up. These are single runs and I don't know the seed-to-seed spread yet, so the gaps could be noise, but there is no sign of a gain. The defaults stay untied. The logs are in `results/train_log_tied.txt` and `results/train_log_bpe_tied.txt`.
+
+**Tests.** New `tests/test_weight_tying.py`: a tied model holds one tensor for both layers (with its own bias); parameter counts drop by exactly `vocab_size * C` for both vocabularies; a tied model gives exactly the same logits as an untied one with a copied matrix; the shared gradient is the sum of the embedding and output-layer gradients, and tokens missing from the input still get one; an AdamW step keeps the tie; a saved tied model loads back tied with identical outputs; the committed checkpoint stays untied; the export ships the matrix once; the JavaScript engine matches PyTorch on tied character and BPE models without `lm_head.weight`; and `train.py --tie-weights` runs end to end and saves a tied checkpoint. 109 tests pass.
+
+**Next.** Measure the seed-to-seed spread of the `small` config (a few runs with different `--seed`), so differences like these, and the earlier schedule and BPE results, can be judged against it.
+
 ## 2026-11-21: Learning-rate warmup, cosine decay and gradient clipping
 
 **What changed.** `train.py` has always used the same learning rate for every step. New `get_lr()` gives the rate for each step, and `--lr-schedule cosine` turns on a linear warmup over `--warmup-iters` steps (100 by default, starting at 1/100 of the peak rather than 0) followed by half a cosine down to `--min-lr` (a tenth of the peak by default) at the last step. `--grad-clip N` calls `clip_grad_norm_` before each AdamW step, which scales every gradient by the same factor so their combined norm is at most N. Both are off by default, and I checked the default path is unchanged: 500 steps of the `small` config give exactly the same losses before and after the change (val 1.9976 at step 500). The progress lines now also show the average gradient norm since the last eval, plus the learning rate when a schedule is on, and the checkpoint records the settings it was trained with.

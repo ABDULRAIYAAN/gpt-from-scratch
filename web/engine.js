@@ -75,7 +75,10 @@ function createGPT(blob) {
     });
   }
   const tokEmb = W['token_embedding_table.weight'], posEmb = W['position_embedding_table.weight'];
-  const lnfG = W['ln_f.weight'], lnfB = W['ln_f.bias'], headW = W['lm_head.weight'], headB = W['lm_head.bias'];
+  const lnfG = W['ln_f.weight'], lnfB = W['ln_f.bias'], headB = W['lm_head.bias'];
+  // A model trained with tied weights scores tokens with its embedding matrix (V x C), so the
+  // export leaves lm_head.weight out rather than ship the same matrix twice.
+  const headW = W['lm_head.weight'] || tokEmb;
 
   // scratch buffers
   const x = new Float32Array(C), h = new Float32Array(C), cat = new Float32Array(C), tmp = new Float32Array(C);

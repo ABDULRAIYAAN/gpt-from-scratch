@@ -27,6 +27,9 @@ class GPTConfig:
     n_head: int = 6
     n_layer: int = 6
     dropout: float = 0.2
+    # Share one (vocab_size, C) matrix between the token embedding and the output layer.
+    # Off by default so checkpoints saved before this option existed load as they were trained.
+    tie_weights: bool = False
 
 
 def upgrade_state_dict(state_dict: dict, n_head: int, n_layer: int) -> dict:
@@ -188,6 +191,15 @@ class GPT(nn.Module):
         self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
         self.ln_f = nn.LayerNorm(config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
+        if config.tie_weights:
+            # Weight tying (Press & Wolf, 2017): the embedding maps token -> vector with row
+            # token_embedding_table.weight[i], and the output layer scores vector -> token i with
+            # the dot product against row i of lm_head.weight. Both are (vocab_size, C), so one
+            # matrix can do both jobs: a token's input vector is also the direction that predicts
+            # it. That saves vocab_size * C parameters, and every row gets a gradient on every
+            # step through the output layer, not only when its token appears in the input.
+            # The output bias (vocab_size,) stays separate.
+            self.lm_head.weight = self.token_embedding_table.weight
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -204,6 +216,7 @@ class GPT(nn.Module):
         return super().load_state_dict(state_dict, strict=strict, assign=assign)
 
     def num_params(self) -> int:
+        # parameters() lists a shared tensor once, so a tied matrix is only counted once
         return sum(p.numel() for p in self.parameters())
 
     def forward(self, idx, targets=None, cache: KVCache | None = None):

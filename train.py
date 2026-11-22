@@ -8,6 +8,7 @@ Usage:
     python train.py --config small --tokenizer bpe --bpe-vocab-size 512   # subword tokens
     python train.py --max-iters 2000 --device cuda
     python train.py --config small --lr-schedule cosine --grad-clip 1.0   # warmup, cosine decay, clipping
+    python train.py --config small --tie-weights                          # one matrix for embedding and output
 """
 
 import argparse
@@ -53,6 +54,8 @@ def parse_args():
                    help="learning rate at the last step for --lr-schedule cosine (default: learning rate / 10)")
     p.add_argument("--grad-clip", type=float, default=0.0,
                    help="clip the gradient's global norm to this value before each step (0 = off)")
+    p.add_argument("--tie-weights", action="store_true",
+                   help="share one matrix between the token embedding and the output layer")
     # Any preset value can be overridden from the command line.
     for k, v in PRESETS["full"].items():
         p.add_argument(f"--{k.replace('_', '-')}", type=type(v), default=None)
@@ -143,9 +146,13 @@ def main():
         n_head=cfg["n_head"],
         n_layer=cfg["n_layer"],
         dropout=cfg["dropout"],
+        tie_weights=args.tie_weights,
     )
     model = GPT(model_cfg).to(device)
-    print(f"model: {model.num_params() / 1e6:.2f}M parameters | config: {args.config}")
+    print(
+        f"model: {model.num_params() / 1e6:.2f}M parameters | config: {args.config}"
+        + (" | embedding and output weights tied" if args.tie_weights else "")
+    )
     print(f"random-guess loss would be ln({tok.vocab_size}) = {math.log(tok.vocab_size):.4f}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg["learning_rate"])

@@ -1,0 +1,42 @@
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.81M parameters | config: small | embedding and output weights tied
+random-guess loss would be ln(65) = 4.1744
+lr schedule: cosine (peak 0.001, 100 warmup steps, final 0.0001) | grad clip: off
+step     0 | train loss 4.1980 | val loss 4.1979 | 0.0 min
+step   500 | train loss 1.9833 | val loss 2.0520 | 1.0 min | lr 9.85e-04 | grad norm 1.08
+step  1000 | train loss 1.7341 | val loss 1.8679 | 2.2 min | lr 9.27e-04 | grad norm 1.35
+step  1500 | train loss 1.6015 | val loss 1.7652 | 3.1 min | lr 8.31e-04 | grad norm 1.22
+step  2000 | train loss 1.5413 | val loss 1.7114 | 4.0 min | lr 7.06e-04 | grad norm 1.14
+step  2500 | train loss 1.4866 | val loss 1.6724 | 4.9 min | lr 5.65e-04 | grad norm 1.10
+step  3000 | train loss 1.4471 | val loss 1.6416 | 5.9 min | lr 4.22e-04 | grad norm 1.08
+step  3500 | train loss 1.4212 | val loss 1.6198 | 6.8 min | lr 2.93e-04 | grad norm 1.08
+step  4000 | train loss 1.3945 | val loss 1.5920 | 7.7 min | lr 1.89e-04 | grad norm 1.08
+step  4500 | train loss 1.3841 | val loss 1.5711 | 8.6 min | lr 1.23e-04 | grad norm 1.08
+step  5000 | train loss 1.3705 | val loss 1.5917 | 9.5 min | lr 1.00e-04 | grad norm 1.09
+
+done in 9.5 min | best val loss 1.5711
+checkpoint saved to checkpoints/tied/ckpt.pt
+
+--- sample ---
+
+DUKE OF AUMERLE:
+
+For Marger:
+Why, sir, your pretty at into our bade and but in?
+
+QUEEN MARGARET:
+What is't the earless of Well,--Pesterful and his Pulse.
+
+BUSHY:
+'We'll your accession to well go bland,' not you country,
+And to but hear me, yet his value,
+Doth saide up charave you with partain; and the shows
+He lay deep so shall upon to me;
+Be mislession sound fly for that your head,
+Most I have fellow'd within! well works, scept.
+
+GLOUCESTER:
+And too must an oten reques, his Coriolanus,
+And in't, for his cagre lamishonours, sir,
+Pray once to fair, propheat with his season:
+Messertake my love

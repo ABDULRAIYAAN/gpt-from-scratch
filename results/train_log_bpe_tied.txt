@@ -1,0 +1,37 @@
+learning 256 BPE merges ...
+dataset: 1,115,394 chars -> 575,806 tokens (1.94 chars/token) | vocab size: 512 | tokenizer: bpe | device: cpu
+model: 0.87M parameters | config: small | embedding and output weights tied
+random-guess loss would be ln(512) = 6.2383
+step     0 | train loss 6.2384 | val loss 6.2370 | 0.0 min
+step   500 | train loss 3.2134 | val loss 3.4172 | 1.0 min | grad norm 0.87
+step  1000 | train loss 2.8490 | val loss 3.1495 | 1.9 min | grad norm 1.20
+step  1500 | train loss 2.7174 | val loss 3.0368 | 2.9 min | grad norm 1.29
+step  2000 | train loss 2.6040 | val loss 2.9666 | 3.8 min | grad norm 1.30
+step  2500 | train loss 2.5746 | val loss 2.9353 | 4.8 min | grad norm 1.29
+step  3000 | train loss 2.5234 | val loss 2.9225 | 5.7 min | grad norm 1.29
+step  3500 | train loss 2.4735 | val loss 2.8922 | 6.7 min | grad norm 1.28
+step  4000 | train loss 2.4426 | val loss 2.8481 | 7.6 min | grad norm 1.27
+step  4500 | train loss 2.4332 | val loss 2.8794 | 8.6 min | grad norm 1.26
+step  5000 | train loss 2.3886 | val loss 2.8476 | 9.6 min | grad norm 1.25
+
+done in 9.6 min | best val loss 2.8476
+checkpoint saved to checkpoints/bpe_tied/ckpt.pt
+
+--- sample ---
+
+Hannot back too entreatient disgress,
+We shall weep in good confermission, yes 'tis poor
+Majesty to use a gracel of this which he
+Imghter'd, or Phahen the ely dare.
+How nowither our cousin, spake up Heetharry,
+Which blows in her in my cold rotten power
+To evermpt thine eyes thou spack'd,
+Own thou art partiful, but Roman: I say,
+Where we'll hear the place: and laid's head,
+I mean hath, so nor no father,
+To mercy Capulet, as then goes therein perceive
+Your hounds, I'll bear them so come his fair queen's hands:
+Grow thy father's voice and very hears,
+Richmonds to a mind.
+RIVERS:
+Here comes I kno

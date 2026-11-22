@@ -49,6 +49,19 @@ The BPE model needs 6.4% fewer bits per character. Part of that comes from seein
 
 The schedule takes 2.9% off the bits per character for the same number of steps and no extra compute. Clipping the gradient norm to 1.0 made no measurable difference here: the average norm before clipping stayed between 0.96 and 1.14 for the whole run, and the losses track the unclipped run closely at every eval. The cosine run's training log is in [`results/train_log_cosine.txt`](results/train_log_cosine.txt). (The committed checkpoint scores 2.327 with a constant rate; it was trained before the attention heads were batched, which changed the random starting weights, so the constant run above is the like-for-like baseline.)
 
+### Weight tying
+
+`train.py --tie-weights` makes the token embedding and the output layer share one matrix (both are vocab x 128), as GPT-2 does. I trained each tokenizer with and without it, same seed and settings, 5,000 steps on a 2-core CPU, scored with `evaluate.py` on the full validation split:
+
+| Tokenizer, schedule | Weights | Parameters | Loss/token | **Bits/char** |
+|---|---|---|---|---|
+| Characters, warmup + cosine | separate | 816,705 | 1.576 | **2.273** |
+| Characters, warmup + cosine | tied | 808,385 | 1.582 | **2.283** |
+| BPE (512), constant | separate | 931,584 | 2.834 | **2.177** |
+| BPE (512), constant | tied | 866,048 | 2.842 | **2.184** |
+
+At this size tying doesn't help: it removes 1% of the character model's parameters and 7% of the BPE model's, and both end up 0.3-0.4% worse in bits per character, with train loss higher too, so the shared matrix costs a little capacity rather than reducing overfitting. These are single runs and I haven't measured how much a result moves between seeds, so a gap of 0.01 bits may be noise. The training logs are [`results/train_log_tied.txt`](results/train_log_tied.txt) and [`results/train_log_bpe_tied.txt`](results/train_log_bpe_tied.txt). The defaults stay untied.
+
 A sample from the small model, given the prompt `ROMEO:`:
 
 ```
@@ -82,6 +95,7 @@ python train.py --config small --n-layer 6 --max-iters 8000          # override 
 python train.py --config small --tokenizer bpe --out checkpoints/bpe # byte-pair encoding instead of characters
 python train.py --config small --max-iters 5000 --lr-schedule cosine --out checkpoints/cosine   # warmup + cosine decay
 python train.py --config small --lr-schedule cosine --warmup-iters 200 --min-lr 5e-5 --grad-clip 1.0
+python train.py --config small --tie-weights --out checkpoints/tied     # one matrix for the embedding and output layer
 python sample.py --tokens 1000 --top-k 20 --num-samples 3
 python sample.py --tokens 5000 --kv-cache                             # key/value cache: 2-9x faster sampling on CPU
 python evaluate.py checkpoints/ckpt.pt checkpoints/bpe/ckpt.pt       # bits per character on the validation split
@@ -99,6 +113,8 @@ ids.map(id => d.push(id)).join("");            // holds back a character split a
 ```
 
 `--lr-schedule cosine` ramps the learning rate up linearly for `--warmup-iters` steps (100 by default), then follows half a cosine from `--learning-rate` down to `--min-lr` (a tenth of it by default) at the last step. `--grad-clip N` rescales all the gradients together whenever their combined norm is above N. Both are off by default, so the default command trains exactly as before. With either one on, the progress lines also show the learning rate and the average gradient norm, and the checkpoint records the settings (`lr_schedule`, `warmup_iters`, `grad_clip`, `learning_rate`).
+
+`--tie-weights` sets `tie_weights` in the model config, so the checkpoint, `sample.py`, `evaluate.py`, `app.py` and `export_web.py` all rebuild the model tied. The checkpoint stores the shared matrix once, and the exported page leaves `lm_head.weight` out, because `web/engine.js` scores tokens with the embedding matrix when it is missing. Checkpoints saved before the option existed load untied, as they were trained.
 
 `evaluate.py` takes any number of checkpoints and prints a table with loss per token, bits per token and bits per character on the full validation split (the last 10% of the text). `--stride 32` uses overlapping windows so every token after the first window gets at least 32 tokens of context; this lowers the numbers a little and takes twice as long.
 
@@ -136,7 +152,7 @@ pip install pytest
 python -m pytest tests
 ```
 
-The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that the learning-rate schedule warms up, decays to its floor and stays constant when it is off (and that `train.py` runs end to end with it and gradient clipping), that `checkpoints/ckpt.pt` still loads, that the key/value cache gives the same logits as a full forward pass (and the same window rule, step by step, as the browser engine), that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint that talks about tokens (and rebuilds the committed `docs/index.html` byte for byte, with its character wording unchanged), and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
+The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that the learning-rate schedule warms up, decays to its floor and stays constant when it is off (and that `train.py` runs end to end with it and gradient clipping), that tied weights are one tensor that gets the sum of both gradients, stay tied through an optimizer step and a save and load, and run the same in the browser engine, that `checkpoints/ckpt.pt` still loads, that the key/value cache gives the same logits as a full forward pass (and the same window rule, step by step, as the browser engine), that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint that talks about tokens (and rebuilds the committed `docs/index.html` byte for byte, with its character wording unchanged), and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
 
 ## How it works
 
@@ -158,7 +174,7 @@ characters -> token embedding + position embedding
 | `MultiHeadAttention` | `model.py` | Causal self-attention with four 32-wide heads computed together: one `Linear(C, 3C)` makes every head's queries, keys and values, the heads become a batch axis, queries and keys score every earlier character (scaled by 1/sqrt(head_size)), a lower-triangular mask hides the future, softmax weights the values, and the heads are concatenated and projected |
 | `FeedForward` | `model.py` | Per-character MLP with a 4x expansion and ReLU |
 | `Block` | `model.py` | Attention then feed-forward, each with pre-LayerNorm and a residual connection |
-| `GPT` | `model.py` | Embeddings, four blocks, output head, and `generate()` with temperature and top-k sampling |
+| `GPT` | `model.py` | Embeddings, four blocks, output head, and `generate()` with temperature and top-k sampling; with `tie_weights` the output head reuses the token embedding matrix, so each token's input vector is also the direction that predicts it |
 | `KVCache`, `next_logits` | `model.py` | Keeps every layer's keys and values for the tokens already in the window, so `generate(use_cache=True)` feeds one new token per step; when the window is full it rebuilds the cache from the newest half, like the browser engine |
 | `total_nll`, `evaluate_text` | `evaluate.py` | Slides the context window over the whole validation split, adds up -log p of every token once, and divides by the number of characters to get bits per character |
 | `write` | `app.py` | The Gradio app's loop: samples one token at a time from any checkpoint and streams the text to the page until the requested number of characters is written |
@@ -177,6 +193,7 @@ characters -> token embedding + position embedding
 | Dropout | 0.1 | 0.2 |
 | Learning rate (AdamW) | 1e-3 | 3e-4 |
 | Schedule | constant (`--lr-schedule cosine` optional) | constant |
+| Embedding and output weights | separate (`--tie-weights` optional) | separate |
 | Steps | 5,000 | 5,000 |
 
 ## Limitations
@@ -193,7 +210,7 @@ Models like ChatGPT use the same core architecture at a far larger scale, with s
 
 ```
 gpt-from-scratch/
-├── model.py              GPT architecture and key/value cache
+├── model.py              GPT architecture, key/value cache and optional weight tying
 ├── tokenizer.py          character-level and BPE tokenizers
 ├── data.py               dataset download, batching, device selection
 ├── bigram.py             baseline model
@@ -234,6 +251,7 @@ gpt-from-scratch/
 - [ ] Train on a different dataset, such as Malay text
 - [x] Key/value cache for `generate()` in PyTorch (`sample.py --kv-cache`)
 - [x] Learning-rate warmup, cosine decay and gradient clipping (`train.py --lr-schedule cosine --grad-clip`; 2.273 vs 2.341 bits per character)
+- [x] Weight tying between the embedding and output layer (`train.py --tie-weights`; no gain at this size: 2.283 vs 2.273 bits per character)
 
 ## Acknowledgements
 

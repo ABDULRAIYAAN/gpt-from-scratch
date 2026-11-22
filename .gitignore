@@ -12,4 +12,6 @@ data/
 checkpoints/full/
 checkpoints/bpe/
 checkpoints/cosine/
+checkpoints/tied/
+checkpoints/bpe_tied/
 checkpoints/sample.txt
