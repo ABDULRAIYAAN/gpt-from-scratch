@@ -1,5 +1,32 @@
 # Devlog
 
+## 2026-11-23: How much does the seed move the result?
+
+**Why.** The last three entries compared single runs: warmup + cosine decay against a constant rate, tied against separate weights, BPE against characters. Each run is one draw. The seed sets the starting weights, the order of the random batches and the dropout masks, so I had no idea whether a 0.010 bits-per-character gap was a real effect or just a different draw. Yesterday's entry ended on exactly that question.
+
+**What changed.** New `seeds.py` runs `train.py` once per seed (everything after `--` is passed through), saves each run into `<out>/seed<N>/` with its log, scores every checkpoint on the full validation split with `evaluate.py`, and prints each run plus the mean, sample standard deviation and range. A seed that already has a checkpoint is skipped, so a sweep that gets interrupted can be restarted with the same command, and `--ckpts` folds in runs trained earlier. It refuses `--seed`, `--out` and `--data` after the `--`, because it sets those itself. `train.py` now saves `seed` in the checkpoint so runs can be told apart; it doesn't change anything else, and `checkpoints/ckpt.pt` loads as before (its seed shows as `?`).
+
+**The runs.** The character model, `small` config, 5,000 steps, seeds 1, 2 and 3, once with the constant rate and once with warmup + cosine decay. Six runs on the 2-core CPU, two at a time with one thread each, about 18.5 minutes per run. Bits per character on the full validation split:
+
+| | Seed 1337 (earlier) | Seed 1 | Seed 2 | Seed 3 | Mean of 4 | Std of 4 | Std of the 3 new |
+|---|---|---|---|---|---|---|---|
+| Constant | 2.341 | 2.318 | 2.300 | 2.315 | 2.319 | 0.017 | 0.010 |
+| Warmup + cosine | 2.273 | 2.283 | 2.264 | 2.270 | 2.273 | 0.008 | 0.010 |
+
+**What it says.** One standard deviation is about 0.01 bits per character and the range over three seeds is 0.018, for both schedules. So:
+
+- The schedule is a real gain, just smaller than I reported. The cosine run beats the constant one for every seed, and the means differ by 0.046 bits (2.0%), about five standard errors. The single-run comparison said 0.068 (2.9%), because seed 1337 turned out to be the worst constant run of the four.
+- Weight tying (2.283 against 2.273) is inside the noise. Seed 1 without tying scored 2.283 too. So "tying doesn't help at this size" stands, but "it's slightly worse" isn't supported.
+- The BPE gain over characters (2.177 against 2.327, single runs) is about 15 standard deviations, so it is safe even before running BPE seeds.
+
+The seed-1337 runs came from earlier sessions, possibly on another PyTorch version, so I keep the three-seed numbers separate in the table.
+
+**Something I noticed.** Seed 1 picked its checkpoint at step 4,500 in both schedules, because `train.py` keeps the step with the best *estimated* validation loss, and that estimate is only 50 random batches. With the cosine schedule the learning rate is at its lowest at the end, so step 5,000 should be the better model, and the 50-batch estimate can't tell 0.005 apart reliably. That adds a little noise to every result in the README.
+
+**Tests.** New `tests/test_seeds.py`: `spread` matches Python's `statistics` module, with no standard deviation for one run; the report lists every run (old checkpoints with `?` for the seed); two `train.py` runs with the same seed give exactly the same weights and a different seed doesn't, which is what makes seed comparisons mean anything; `seeds.py` trains two seeds, writes their logs, prints the summary and skips them on a second run; it refuses the arguments it sets itself; and `--ckpts` on the committed checkpoint reproduces the README's 2.327. 116 tests pass.
+
+**Next.** Score the final checkpoint as well as the best-estimated one (or estimate the validation loss with more batches), so checkpoint picking stops adding noise to the comparisons.
+
 ## 2026-11-22: Weight tying between the embedding and the output layer
 
 **What changed.** The token embedding (`token_embedding_table.weight`) and the output layer (`lm_head.weight`) are both `(vocab_size, C)` matrices: one turns token i into a vector, the other scores a vector against row i to predict token i. New `tie_weights` in `GPTConfig`, set with `train.py --tie-weights`, makes them the same tensor, the way GPT-2 does it. The output bias stays separate. Because the two uses share one tensor, backprop adds both gradients into it, so every row gets updated on every step through the output layer, not only the rows of tokens that appeared in the input. It saves `vocab_size * C` parameters: 8,320 for the character model (816,705 -> 808,385) and 65,536 for the 512-token BPE model (931,584 -> 866,048). `num_params()` already counted a shared tensor once, and AdamW gets it once too.

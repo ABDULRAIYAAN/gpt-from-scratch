@@ -14,4 +14,5 @@ checkpoints/bpe/
 checkpoints/cosine/
 checkpoints/tied/
 checkpoints/bpe_tied/
+checkpoints/seeds/
 checkpoints/sample.txt

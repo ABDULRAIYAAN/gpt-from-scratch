@@ -212,6 +212,8 @@ def main():
                         "lr_schedule": args.lr_schedule,
                         "warmup_iters": args.warmup_iters if args.lr_schedule == "cosine" else 0,
                         "grad_clip": args.grad_clip,
+                        # the random seed, so seeds.py can tell repeat runs of one recipe apart
+                        "seed": args.seed,
                     },
                     os.path.join(args.out, "ckpt.pt"),
                 )

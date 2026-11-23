@@ -1,0 +1,144 @@
+seed 1: train.py --config small --lr-schedule cosine --max-iters 5000 --eval-interval 500 --seed 1 --out checkpoints/seeds/cosine/seed1 --data data/input.txt
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+lr schedule: cosine (peak 0.001, 100 warmup steps, final 0.0001) | grad clip: off
+step     0 | train loss 4.2634 | val loss 4.2642 | 0.1 min
+step   500 | train loss 1.9015 | val loss 1.9913 | 2.1 min | lr 9.85e-04 | grad norm 1.08
+step  1000 | train loss 1.6842 | val loss 1.8356 | 3.9 min | lr 9.27e-04 | grad norm 1.10
+step  1500 | train loss 1.5920 | val loss 1.7594 | 5.7 min | lr 8.31e-04 | grad norm 1.04
+step  2000 | train loss 1.5266 | val loss 1.7073 | 7.6 min | lr 7.06e-04 | grad norm 1.00
+step  2500 | train loss 1.4827 | val loss 1.6622 | 9.4 min | lr 5.65e-04 | grad norm 0.99
+step  3000 | train loss 1.4354 | val loss 1.6452 | 11.3 min | lr 4.22e-04 | grad norm 0.98
+step  3500 | train loss 1.4172 | val loss 1.6143 | 13.1 min | lr 2.93e-04 | grad norm 0.98
+step  4000 | train loss 1.3849 | val loss 1.5854 | 14.9 min | lr 1.89e-04 | grad norm 1.00
+step  4500 | train loss 1.3833 | val loss 1.5768 | 16.9 min | lr 1.23e-04 | grad norm 1.01
+step  5000 | train loss 1.3733 | val loss 1.5800 | 18.8 min | lr 1.00e-04 | grad norm 1.02
+
+done in 18.8 min | best val loss 1.5768
+checkpoint saved to checkpoints/seeds/cosine/seed1/ckpt.pt
+
+--- sample ---
+
+Coquerous Lord Marcius? You are his door part
+As she give no more. Come, I do not into Honour.
+
+MONTAGUE:
+I should not well be spoked
+Because him look an your scrows for his lords,
+But thou art for the light appay with Forward;
+Thus very then sworthing the commony plone within of his;
+But do move your knight,
+And ours
+That your doble chance.
+
+BUKE OF AUMERLE:
+You spoke some troat thou artst of a cat of,
+We are son? and thou heaven'st does bid most
+veice wing day thine own and govel,
+With small them 'follows,' have a bloody favours,
+He are designion the pate-bloody but my capes.
+
+DUKE VINCENTI
+seed 2: train.py --config small --lr-schedule cosine --max-iters 5000 --eval-interval 500 --seed 2 --out checkpoints/seeds/cosine/seed2 --data data/input.txt
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+lr schedule: cosine (peak 0.001, 100 warmup steps, final 0.0001) | grad clip: off
+step     0 | train loss 4.2000 | val loss 4.1973 | 0.1 min
+step   500 | train loss 1.9178 | val loss 1.9999 | 1.9 min | lr 9.85e-04 | grad norm 1.08
+step  1000 | train loss 1.6853 | val loss 1.8412 | 3.8 min | lr 9.27e-04 | grad norm 1.09
+step  1500 | train loss 1.6013 | val loss 1.7634 | 5.7 min | lr 8.31e-04 | grad norm 1.03
+step  2000 | train loss 1.5242 | val loss 1.7033 | 7.5 min | lr 7.06e-04 | grad norm 0.99
+step  2500 | train loss 1.4800 | val loss 1.6669 | 9.3 min | lr 5.65e-04 | grad norm 0.98
+step  3000 | train loss 1.4473 | val loss 1.6359 | 11.2 min | lr 4.22e-04 | grad norm 0.98
+step  3500 | train loss 1.4103 | val loss 1.6182 | 13.0 min | lr 2.93e-04 | grad norm 0.99
+step  4000 | train loss 1.3844 | val loss 1.5973 | 14.9 min | lr 1.89e-04 | grad norm 1.00
+step  4500 | train loss 1.3732 | val loss 1.5790 | 16.6 min | lr 1.23e-04 | grad norm 1.02
+step  5000 | train loss 1.3672 | val loss 1.5749 | 18.4 min | lr 1.00e-04 | grad norm 1.03
+
+done in 18.4 min | best val loss 1.5749
+checkpoint saved to checkpoints/seeds/cosine/seed2/ckpt.pt
+
+--- sample ---
+
+Which I know there but honourable of power;
+Die bread fair to Here is your hands die,
+Put their arms for broughts made in every lady.
+
+Clown:
+I brave you, shither pluck, twas my resolved,
+As that grickly be rudged force holy do right it in me.
+
+PRINCE EDWARD:
+Iwall I, do it were in discarceby; my i' death.
+Ift, as should should from me, come, you will wear.
+You cannot thee traitor; they express'd this wear.
+Which I stay blame nothing for half't;
+They know you?
+
+POLIXENES:
+I thank you?
+
+LEONTES:
+It would cannot sour holy gracel gaven!
+Come, let's his behard with dog by the that off a
+seed 3: train.py --config small --lr-schedule cosine --max-iters 5000 --eval-interval 500 --seed 3 --out checkpoints/seeds/cosine/seed3 --data data/input.txt
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+lr schedule: cosine (peak 0.001, 100 warmup steps, final 0.0001) | grad clip: off
+step     0 | train loss 4.1775 | val loss 4.1740 | 0.1 min
+step   500 | train loss 1.9063 | val loss 1.9939 | 1.9 min | lr 9.85e-04 | grad norm 1.05
+step  1000 | train loss 1.6905 | val loss 1.8366 | 3.7 min | lr 9.27e-04 | grad norm 1.07
+step  1500 | train loss 1.5906 | val loss 1.7607 | 5.5 min | lr 8.31e-04 | grad norm 1.01
+step  2000 | train loss 1.5343 | val loss 1.7171 | 7.4 min | lr 7.06e-04 | grad norm 0.98
+step  2500 | train loss 1.4783 | val loss 1.6659 | 9.3 min | lr 5.65e-04 | grad norm 0.97
+step  3000 | train loss 1.4415 | val loss 1.6309 | 11.2 min | lr 4.22e-04 | grad norm 0.97
+step  3500 | train loss 1.4143 | val loss 1.6160 | 13.1 min | lr 2.93e-04 | grad norm 0.99
+step  4000 | train loss 1.3803 | val loss 1.5973 | 14.8 min | lr 1.89e-04 | grad norm 1.00
+step  4500 | train loss 1.3808 | val loss 1.5765 | 16.5 min | lr 1.23e-04 | grad norm 1.01
+step  5000 | train loss 1.3699 | val loss 1.5529 | 18.3 min | lr 1.00e-04 | grad norm 1.02
+
+done in 18.3 min | best val loss 1.5529
+checkpoint saved to checkpoints/seeds/cosine/seed3/ckpt.pt
+
+--- sample ---
+
+No, this house! Wakes? what we depose!
+But it's little York from for your child conscare to be
+As linger
+As a durbs of they said.
+Become, those remorceity!
+
+MARIANA:
+Ay, no, then where I stay I would not keep he.
+
+ELBOW:
+What be for made me bide Speak in Ful great law?
+
+ANGELO:
+That sin poison the present childing wretched that would
+They children like himself with be look
+I have dog for then more taving castful be
+Of so lost.
+
+KING EDWARD IV:
+Madam; be resland!
+
+First Senator:
+An the fault what thou plead it daughter,
+Let not the Tranio, this is we she that seat pray,
+If giving it the last.
+
+
+scoring 3 checkpoint(s) on the validation split (111,540 characters)
+
+| Checkpoint | Seed | Best step | Loss/token | Bits/char |
+|---|---|---|---|---|
+| `checkpoints/seeds/cosine/seed1/ckpt.pt` | 1 | 4500 | 1.5823 | 2.283 |
+| `checkpoints/seeds/cosine/seed2/ckpt.pt` | 2 | 5000 | 1.5696 | 2.264 |
+| `checkpoints/seeds/cosine/seed3/ckpt.pt` | 3 | 5000 | 1.5732 | 2.270 |
+
+bits/char over 3 runs: mean 2.272 | std 0.009 | range 2.264 - 2.283 (0.018)
+loss/token over 3 runs: mean 1.5750 | std 0.0065 | range 1.5696 - 1.5823 (0.0127)
