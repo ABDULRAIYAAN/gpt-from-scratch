@@ -9,6 +9,9 @@ Usage:
     python train.py --max-iters 2000 --device cuda
     python train.py --config small --lr-schedule cosine --grad-clip 1.0   # warmup, cosine decay, clipping
     python train.py --config small --tie-weights                          # one matrix for embedding and output
+
+Two checkpoints are written to --out: ckpt.pt holds the step with the best estimated validation
+loss, final.pt the weights after the last step.
 """
 
 import argparse
@@ -172,7 +175,35 @@ def main():
         hardware = f"{os.cpu_count()}-core CPU"
     else:
         hardware = device.upper()
+
+    def save_checkpoint(path, step, val_loss, elapsed):
+        torch.save(
+            {
+                "model": model.state_dict(),
+                "model_config": asdict(model_cfg),
+                "tokenizer": tok.state(),
+                # the character list on its own too, as checkpoints from before BPE support stored it
+                **({"chars": tok.chars} if args.tokenizer == "char" else {}),
+                "step": step,
+                "val_loss": val_loss,       # the estimated val loss at this step
+                "history": history,
+                # how long and where it trained, for the browser demo's spec table
+                "max_iters": cfg["max_iters"],
+                "minutes": elapsed / 60,
+                "hardware": hardware,
+                # the optimisation settings, so runs with different schedules can be told apart
+                "learning_rate": cfg["learning_rate"],
+                "lr_schedule": args.lr_schedule,
+                "warmup_iters": args.warmup_iters if args.lr_schedule == "cosine" else 0,
+                "grad_clip": args.grad_clip,
+                # the random seed, so seeds.py can tell repeat runs of one recipe apart
+                "seed": args.seed,
+            },
+            path,
+        )
+
     best_val = float("inf")
+    best_step = 0
     history = []
     grad_norms = []  # global gradient norm (before clipping) of each step since the last eval
     t0 = time.time()
@@ -193,31 +224,15 @@ def main():
             grad_norms = []
             if losses["val"] < best_val:
                 best_val = losses["val"]
-                torch.save(
-                    {
-                        "model": model.state_dict(),
-                        "model_config": asdict(model_cfg),
-                        "tokenizer": tok.state(),
-                        # the character list on its own too, as checkpoints from before BPE support stored it
-                        **({"chars": tok.chars} if args.tokenizer == "char" else {}),
-                        "step": it,
-                        "val_loss": best_val,
-                        "history": history,
-                        # how long and where it trained, for the browser demo's spec table
-                        "max_iters": cfg["max_iters"],
-                        "minutes": elapsed / 60,
-                        "hardware": hardware,
-                        # the optimisation settings, so runs with different schedules can be told apart
-                        "learning_rate": cfg["learning_rate"],
-                        "lr_schedule": args.lr_schedule,
-                        "warmup_iters": args.warmup_iters if args.lr_schedule == "cosine" else 0,
-                        "grad_clip": args.grad_clip,
-                        # the random seed, so seeds.py can tell repeat runs of one recipe apart
-                        "seed": args.seed,
-                    },
-                    os.path.join(args.out, "ckpt.pt"),
-                )
+                best_step = it
+                save_checkpoint(os.path.join(args.out, "ckpt.pt"), it, best_val, elapsed)
             if it == cfg["max_iters"]:
+                # Also keep the weights from the last step. ckpt.pt is picked by an estimate of the
+                # validation loss over eval_iters random batches, which can't reliably tell apart
+                # two evals 0.005 nats apart, so it sometimes keeps an earlier step. With a decaying
+                # learning rate the last step should be the better model; evaluate.py can score
+                # both on the whole validation split (seeds.py --pick both does it for a sweep).
+                save_checkpoint(os.path.join(args.out, "final.pt"), it, losses["val"], elapsed)
                 break
 
         for group in optimizer.param_groups:
@@ -237,8 +252,8 @@ def main():
         grad_norms.append(norm.item())
         optimizer.step()
 
-    print(f"\ndone in {(time.time() - t0) / 60:.1f} min | best val loss {best_val:.4f}")
-    print(f"checkpoint saved to {os.path.join(args.out, 'ckpt.pt')}")
+    print(f"\ndone in {(time.time() - t0) / 60:.1f} min | best val loss {best_val:.4f} (step {best_step})")
+    print(f"checkpoint saved to {os.path.join(args.out, 'ckpt.pt')} | last step saved to {os.path.join(args.out, 'final.pt')}")
 
     # ---- sample from the trained model ----
     model.eval()

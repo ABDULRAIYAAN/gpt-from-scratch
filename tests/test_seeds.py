@@ -6,7 +6,7 @@ import sys
 import pytest
 import torch
 
-from seeds import report, spread
+from seeds import compare, final_path, report, spread
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CKPT = os.path.join(ROOT, "checkpoints", "ckpt.pt")
@@ -112,3 +112,52 @@ def test_seeds_summarises_the_committed_checkpoint(tmp_path):
     assert "| ? | " in result.stdout
     assert "| 2.327 |" in result.stdout  # the README's number for this checkpoint
     assert "bits/char over 1 run: mean 2.327 | std n/a (one run)" in result.stdout
+
+
+def test_compare_pairs_each_run_with_its_last_step():
+    best = [
+        {"path": "a/ckpt.pt", "seed": 1, "step": 4500, "bits_per_char": 2.283},
+        {"path": "b/ckpt.pt", "seed": 2, "step": 5000, "bits_per_char": 2.264},
+        {"path": "c/ckpt.pt", "seed": None, "step": 4000, "bits_per_char": 2.300},
+    ]
+    final = [
+        {"path": "a/final.pt", "seed": 1, "step": 5000, "bits_per_char": 2.275},
+        {"path": "b/final.pt", "seed": 2, "step": 5000, "bits_per_char": 2.264},
+        {"path": "c/final.pt", "seed": None, "step": 5000, "bits_per_char": 2.304},
+    ]
+    text = compare(best, final)
+    assert "| `a` | 1 | 4500 | 2.283 | 2.275 | -0.008 |" in text
+    assert "| `b` | 2 | 5000 | 2.264 | 2.264 | +0.000 |" in text
+    assert "| `c` | ? | 4000 | 2.300 | 2.304 | +0.004 |" in text
+    diffs = [-0.008, 0.0, 0.004]
+    assert f"mean {statistics.mean(diffs):+.3f} | std {statistics.stdev(diffs):.3f}" in text
+    assert "last step better in 1, picked step better in 1, the same step in 1" in text
+    with pytest.raises(ValueError):
+        compare(best, final[:2])  # the two lists must be the same runs
+
+
+def test_final_path_needs_a_final_checkpoint(tmp_path):
+    (tmp_path / "ckpt.pt").write_bytes(b"")
+    with pytest.raises(FileNotFoundError, match="only --pick best"):
+        final_path(str(tmp_path / "ckpt.pt"))
+    (tmp_path / "final.pt").write_bytes(b"")
+    assert final_path(str(tmp_path / "ckpt.pt")) == str(tmp_path / "final.pt")
+    with pytest.raises(FileNotFoundError):
+        final_path(CKPT)  # the committed checkpoint was trained before final.pt existed
+
+
+def test_seeds_scores_the_last_step_too(tmp_path):
+    data = tiny_text(tmp_path)
+    out = tmp_path / "sweep"
+    result = run(["--seeds", "5", "6", "--out", str(out), "--data", str(data), "--device", "cpu",
+                  "--pick", "both", "--", *TINY_TRAIN], tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "Best estimated step (ckpt.pt)" in result.stdout and "Last step (final.pt)" in result.stdout
+    for seed in (5, 6):
+        assert f"seed{seed}/final.pt` | {seed} | 4 |" in result.stdout  # TINY_TRAIN runs 4 steps
+    assert "last - picked over 2 runs: mean" in result.stdout
+
+    final_only = run(["--ckpts", str(out / "seed5" / "ckpt.pt"), "--data", str(data), "--device", "cpu",
+                      "--pick", "final"], tmp_path)
+    assert final_only.returncode == 0, final_only.stderr
+    assert "seed5/final.pt` | 5 | 4 |" in final_only.stdout and "ckpt.pt`" not in final_only.stdout

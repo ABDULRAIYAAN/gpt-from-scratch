@@ -73,6 +73,19 @@ Every result above is one training run, and the seed alone (starting weights, ba
 
 With three fresh seeds each, both schedules have a standard deviation of 0.009-0.010 bits per character and a range of 0.018. The schedule still helps on every seed, but by 0.046 bits (2.0%) on average, not the 0.068 (2.9%) the single runs showed: seed 1337 happened to be the worst constant run of the four. A 0.010 gap, like the weight-tying one, is inside the spread. The logs, with every run and the summary, are [`results/seeds_constant.txt`](results/seeds_constant.txt) and [`results/seeds_cosine.txt`](results/seeds_cosine.txt).
 
+### Best-estimated step or last step
+
+`train.py` keeps the step whose validation loss looks lowest, but that loss is estimated from 50 random batches. In four runs (both schedules, seeds 1 and 1337) it picked step 4,500 over step 5,000, and every time the last step was the better model on the full validation split:
+
+| Run | Picked step | Bits/char (picked, `ckpt.pt`) | Bits/char (last step, `final.pt`) | Last - picked |
+|---|---|---|---|---|
+| Constant, seed 1 | 4500 | 2.318 | 2.305 | -0.013 |
+| Constant, seed 1337 | 4500 | 2.332 | 2.319 | -0.014 |
+| Warmup + cosine, seed 1 | 4500 | 2.283 | 2.273 | -0.010 |
+| Warmup + cosine, seed 1337 | 4500 | 2.272 | 2.264 | -0.008 |
+
+The pick costs about 0.011 bits per character when it goes wrong, about one seed-to-seed standard deviation. Seeds 2 and 3 already picked step 5,000 for both schedules, so scoring the last step for seeds 1-3 gives a mean of 2.307 (std 0.008) for the constant rate and 2.269 (std 0.005) for warmup + cosine: the schedule gain is 0.038 bits (1.6%), and the spread between seeds is smaller once the pick is taken out. Seed 1337 was rerun on the current PyTorch version, so it differs slightly from the earlier tables. The logs are in [`results/pick_final.txt`](results/pick_final.txt).
+
 A sample from the small model, given the prompt `ROMEO:`:
 
 ```
@@ -111,6 +124,7 @@ python sample.py --tokens 1000 --top-k 20 --num-samples 3
 python sample.py --tokens 5000 --kv-cache                             # key/value cache: 2-9x faster sampling on CPU
 python evaluate.py checkpoints/ckpt.pt checkpoints/bpe/ckpt.pt       # bits per character on the validation split
 python seeds.py --seeds 1 2 3 --out checkpoints/seeds/cosine -- --config small --max-iters 5000 --lr-schedule cosine
+python seeds.py --pick both --ckpts checkpoints/seeds/cosine/seed*/ckpt.pt   # best-estimated step against the last step
 ```
 
 `--tokenizer bpe` learns a byte-pair encoding from the training text (512 tokens by default, set with `--bpe-vocab-size`) and stores it in the checkpoint, so `sample.py` and `app.py` pick it up automatically. On Tiny Shakespeare, 512 BPE tokens cover 1.94 characters each on average, so a 64-token context sees about twice as much text. `web/tokenizer.js` has both tokenizers in JavaScript, giving exactly the same ids as `tokenizer.py`:
@@ -131,6 +145,8 @@ ids.map(id => d.push(id)).join("");            // holds back a character split a
 `evaluate.py` takes any number of checkpoints and prints a table with loss per token, bits per token and bits per character on the full validation split (the last 10% of the text). `--stride 32` uses overlapping windows so every token after the first window gets at least 32 tokens of context; this lowers the numbers a little and takes twice as long.
 
 `seeds.py` passes everything after `--` to `train.py`, trains seed N into `<out>/seed<N>/` (with its log in `train_log.txt` there), then prints each run's best step, loss per token and bits per character, and the mean, sample standard deviation and range over the runs. A seed whose checkpoint already exists is skipped, so an interrupted sweep restarts with the same command. `--ckpts` adds checkpoints that are already trained, or summarises them without training anything. `train.py` now saves its `seed` in the checkpoint; older checkpoints show `?`.
+
+`train.py` writes two checkpoints: `ckpt.pt`, the step with the lowest estimated validation loss (the estimate is `eval_iters` random batches, so it is a little noisy), and `final.pt`, the weights after the last step. Both load anywhere a checkpoint does. `seeds.py --pick final` scores the last steps instead, and `--pick both` scores both and prints, run by run, how much the picked step and the last step differ in bits per character. Checkpoints trained before `final.pt` existed only work with `--pick best`, the default.
 
 To train the full model on a free GPU, open [`train_colab.ipynb`](train_colab.ipynb) in Google Colab, switch the runtime to a T4 GPU, and run every cell.
 
@@ -166,7 +182,7 @@ pip install pytest
 python -m pytest tests
 ```
 
-The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that the learning-rate schedule warms up, decays to its floor and stays constant when it is off (and that `train.py` runs end to end with it and gradient clipping), that tied weights are one tensor that gets the sum of both gradients, stay tied through an optimizer step and a save and load, and run the same in the browser engine, that the same seed trains exactly the same weights (and another seed doesn't) and `seeds.py` trains, scores and resumes a sweep, that `checkpoints/ckpt.pt` still loads, that the key/value cache gives the same logits as a full forward pass (and the same window rule, step by step, as the browser engine), that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint that talks about tokens (and rebuilds the committed `docs/index.html` byte for byte, with its character wording unchanged), and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
+The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that the learning-rate schedule warms up, decays to its floor and stays constant when it is off (and that `train.py` runs end to end with it and gradient clipping), that tied weights are one tensor that gets the sum of both gradients, stay tied through an optimizer step and a save and load, and run the same in the browser engine, that the same seed trains exactly the same weights (and another seed doesn't) and `seeds.py` trains, scores and resumes a sweep, that `train.py` keeps both the best-estimated step and the last step and `seeds.py --pick both` compares them, that `checkpoints/ckpt.pt` still loads, that the key/value cache gives the same logits as a full forward pass (and the same window rule, step by step, as the browser engine), that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint that talks about tokens (and rebuilds the committed `docs/index.html` byte for byte, with its character wording unchanged), and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
 
 ## How it works
 
@@ -192,6 +208,7 @@ characters -> token embedding + position embedding
 | `KVCache`, `next_logits` | `model.py` | Keeps every layer's keys and values for the tokens already in the window, so `generate(use_cache=True)` feeds one new token per step; when the window is full it rebuilds the cache from the newest half, like the browser engine |
 | `total_nll`, `evaluate_text` | `evaluate.py` | Slides the context window over the whole validation split, adds up -log p of every token once, and divides by the number of characters to get bits per character |
 | `train_seed`, `spread` | `seeds.py` | Trains the same settings once per seed and reports the mean, sample standard deviation and range of bits per character, so a difference between two recipes can be checked against run-to-run noise |
+| `save_checkpoint`, `compare` | `train.py`, `seeds.py` | Training keeps both the step with the best estimated validation loss (`ckpt.pt`) and the last step (`final.pt`); `compare` scores the two on the full validation split and reports the difference per run, so a noisy pick can be seen instead of hidden in the results |
 | `write` | `app.py` | The Gradio app's loop: samples one token at a time from any checkpoint and streams the text to the page until the requested number of characters is written |
 | Browser engine | `web/engine.js` | The same forward pass in JavaScript, with a key/value cache; builds the checkpoint's tokenizer from the state the page embeds |
 | `page_text` | `export_web.py` | Fills the demo page's wording and spec table from the checkpoint: characters or tokens, context in characters, parameters, training run, loss and bits per character |
@@ -244,7 +261,7 @@ gpt-from-scratch/
 │   ├── bpe.html          the same demo running the BPE model
 │   └── DEVLOG.md         what changed and why, build by build
 ├── tests/                pytest tests for the model, tokenizers, checkpoint loading, the app and the JS engine
-├── checkpoints/ckpt.pt   trained small model
+├── checkpoints/ckpt.pt   trained small model (training also writes final.pt, the last step, which stays out of git)
 ├── results/              training logs and a full sample
 ├── assets/               screenshots
 ├── train_colab.ipynb     GPU training on Google Colab
@@ -269,6 +286,7 @@ gpt-from-scratch/
 - [x] Learning-rate warmup, cosine decay and gradient clipping (`train.py --lr-schedule cosine --grad-clip`; 2.273 vs 2.341 bits per character)
 - [x] Weight tying between the embedding and output layer (`train.py --tie-weights`; no gain at this size: 2.283 vs 2.273 bits per character)
 - [x] Seed-to-seed spread of the `small` config (`seeds.py`; std of 0.009-0.010 bits per character over 3 seeds, schedule gain 2.0% averaged over 4)
+- [x] Keep the last step as well as the best-estimated one (`final.pt`, `seeds.py --pick both`; the last step was 0.011 bits per character better in all 4 runs where they differed)
 
 ## Acknowledgements
 

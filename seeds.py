@@ -17,6 +17,13 @@ Usage:
     # summarise checkpoints that are already trained (e.g. the same recipe from earlier runs)
     python seeds.py --ckpts checkpoints/seeds/cosine/seed1/ckpt.pt checkpoints/cosine/ckpt.pt
 
+    # score the last step of each run (final.pt) as well as the best-estimated step (ckpt.pt)
+    python seeds.py --pick both --ckpts checkpoints/seeds/cosine/seed*/ckpt.pt
+
+train.py keeps two checkpoints per run: ckpt.pt, the step whose validation loss looked best on a
+small random sample, and final.pt, the weights after the last step. --pick chooses which one is
+scored; "both" scores the two and prints how much the choice moved each run.
+
 Seeds whose checkpoint already exists are not trained again unless --retrain is given, so an
 interrupted sweep can be restarted with the same command.
 """
@@ -83,7 +90,7 @@ def score(paths: list[str], val_text: str, device: str, stride: int | None = Non
         runs.append({
             "path": path,
             "seed": saved.get("seed"),   # checkpoints from before this script don't store it
-            "step": saved.get("step"),   # the step whose estimated val loss was best
+            "step": saved.get("step"),   # the step these weights are from
             **r,
         })
     return runs
@@ -91,7 +98,7 @@ def score(paths: list[str], val_text: str, device: str, stride: int | None = Non
 
 def report(runs: list[dict]) -> str:
     """Markdown table of the runs, then the spread of bits per character and loss per token."""
-    lines = ["| Checkpoint | Seed | Best step | Loss/token | Bits/char |", "|---|---|---|---|---|"]
+    lines = ["| Checkpoint | Seed | Step | Loss/token | Bits/char |", "|---|---|---|---|---|"]
     for r in runs:
         seed = "?" if r["seed"] is None else r["seed"]
         lines.append(f"| `{r['path']}` | {seed} | {r['step']} | {r['loss']:.4f} | {r['bits_per_char']:.3f} |")
@@ -103,6 +110,42 @@ def report(runs: list[dict]) -> str:
             f"{name} over {s['n']} run{'s' if s['n'] > 1 else ''}: mean {s['mean']:.{digits}f} | std {std} | "
             f"range {s['min']:.{digits}f} - {s['max']:.{digits}f} ({s['max'] - s['min']:.{digits}f})"
         )
+    return "\n".join(lines)
+
+
+def final_path(ckpt: str) -> str:
+    """The final.pt that train.py writes next to ckpt.pt (the weights after the last step)."""
+    path = os.path.join(os.path.dirname(ckpt), "final.pt")
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"no final.pt next to {ckpt}; it was trained before train.py kept the last step, "
+            f"so only --pick best works for it"
+        )
+    return path
+
+
+def compare(best: list[dict], final: list[dict]) -> str:
+    """Markdown table of best-estimated step against last step for each run, then the paired difference.
+
+    The two lists hold the same runs in the same order. A negative difference means the last
+    step scores fewer bits per character than the step train.py picked.
+    """
+    lines = ["| Run | Seed | Picked step | Bits/char (picked) | Bits/char (last step) | Last - picked |",
+             "|---|---|---|---|---|---|"]
+    diffs = []
+    for b, f in zip(best, final, strict=True):
+        d = f["bits_per_char"] - b["bits_per_char"]
+        diffs.append(d)
+        seed = "?" if b["seed"] is None else b["seed"]
+        lines.append(f"| `{os.path.dirname(b['path']) or '.'}` | {seed} | {b['step']} | {b['bits_per_char']:.3f} | "
+                     f"{f['bits_per_char']:.3f} | {d:+.3f} |")
+    s = spread(diffs)
+    std = "n/a (one run)" if s["std"] is None else f"{s['std']:.3f}"
+    better = sum(d < 0 for d in diffs)
+    same = sum(b["step"] == f["step"] for b, f in zip(best, final))
+    lines += ["", f"last - picked over {s['n']} run{'s' if s['n'] > 1 else ''}: mean {s['mean']:+.3f} | std {std} | "
+                  f"last step better in {better}, picked step better in {s['n'] - better - same}, "
+                  f"the same step in {same}"]
     return "\n".join(lines)
 
 
@@ -120,6 +163,8 @@ def main():
     p.add_argument("--data", default=DEFAULT_PATH, help="text to train on and validate with")
     p.add_argument("--stride", type=int, default=None, help="evaluate.py window step (default: block_size)")
     p.add_argument("--device", default="auto", help="device for scoring (train.py has its own --device)")
+    p.add_argument("--pick", choices=["best", "final", "both"], default="best",
+                   help="score ckpt.pt (best estimated val loss), final.pt (last step) or both")
     args = p.parse_args(own_args)
 
     if not args.seeds and not args.ckpts:
@@ -132,9 +177,22 @@ def main():
              for s in (args.seeds or [])]
     paths += args.ckpts
 
+    finals = [final_path(path) for path in paths] if args.pick != "best" else []
     _, val_text = split_text(load_dataset(args.data))  # the same characters train.py validates on
-    print(f"\nscoring {len(paths)} checkpoint(s) on the validation split ({len(val_text):,} characters)\n")
-    print(report(score(paths, val_text, pick_device(args.device), args.stride)))
+    device = pick_device(args.device)
+    print(f"\nscoring {len(paths)} run(s) on the validation split ({len(val_text):,} characters)\n")
+    if args.pick == "best":
+        print(report(score(paths, val_text, device, args.stride)))
+    elif args.pick == "final":
+        print(report(score(finals, val_text, device, args.stride)))
+    else:
+        best, final = score(paths, val_text, device, args.stride), score(finals, val_text, device, args.stride)
+        print("Best estimated step (ckpt.pt):\n")
+        print(report(best))
+        print("\nLast step (final.pt):\n")
+        print(report(final))
+        print("\nPicked step against last step:\n")
+        print(compare(best, final))
 
 
 if __name__ == "__main__":

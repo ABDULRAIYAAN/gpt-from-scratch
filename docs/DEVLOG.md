@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-11-24: Keeping the last step as well as the best-estimated one
+
+**Why.** Yesterday's sweep showed that `train.py` sometimes saves step 4,500 instead of step 5,000. It keeps whichever step had the lowest *estimated* validation loss, and that estimate is only 50 random batches, too noisy to tell apart two evals a few thousandths of a nat apart. With the cosine schedule the last 500 steps run at the lowest learning rate, so throwing them away on a noisy estimate seemed wrong, and it adds noise to every comparison in the README.
+
+**What changed.** `train.py` now writes `final.pt`, the weights after the last step, next to `ckpt.pt`. Both checkpoints are built by one `save_checkpoint` helper, so they carry the same config, tokenizer and run details, and `final.pt` loads anywhere `ckpt.pt` does. `ckpt.pt` is chosen exactly as before; I checked that a short run with the old and new `train.py` gives identical `ckpt.pt` weights and the same sample. The summary line now says which step was best. `seeds.py` has a new `--pick best|final|both`: `final` scores the last steps, and `both` scores the two checkpoints of every run and prints a table of the difference per run, with its mean, spread and how often each side wins. Old checkpoints have no `final.pt`, so they only work with `--pick best` and anything else gives a clear error. `final.pt` and the new run folder are in `.gitignore`.
+
+**The runs.** I retrained the four runs that had picked step 4,500: constant rate and warmup + cosine, seeds 1 and 1337, `small` config, 5,000 steps, two at a time on the 2-core CPU (16.5-17.7 minutes each). The seed-1 runs came out bit-for-bit the same as yesterday (2.318 and 2.283 bits per character for the picked step). Seed 1337 differs a little from the README's older numbers (2.332 against 2.341 for constant), because those were trained on an earlier PyTorch version. On the full validation split:
+
+| Run | Picked step | Bits/char, picked | Bits/char, last step | Last - picked |
+|---|---|---|---|---|
+| Constant, seed 1 | 4500 | 2.318 | 2.305 | -0.013 |
+| Constant, seed 1337 | 4500 | 2.332 | 2.319 | -0.014 |
+| Cosine, seed 1 | 4500 | 2.283 | 2.273 | -0.010 |
+| Cosine, seed 1337 | 4500 | 2.272 | 2.264 | -0.008 |
+
+**What it says.** The last step won all four times, by 0.011 bits per character on average (std 0.003), which is about one seed-to-seed standard deviation. The estimate can be badly off: for cosine seed 1337 it said step 5,000 was 0.018 nats *worse* than step 4,500, and on the full split it is 0.008 bits better. With the constant rate I expected the pick to go either way, but in both runs the last step was still better. Seeds 2 and 3 already picked step 5,000, so with the last step for seeds 1-3 the constant rate averages 2.307 (std 0.008) and warmup + cosine 2.269 (std 0.005). The schedule gain becomes 0.038 bits (1.6%), close to the 0.039 the picked checkpoints give for the same three seeds, and the spread between seeds shrinks, so part of what I measured as seed noise yesterday was really checkpoint-picking noise. The logs and the full `seeds.py --pick both` output are in `results/pick_final.txt`.
+
+**Tests.** In `tests/test_train.py`, a tiny run at two learning rates checks that `ckpt.pt` holds the step with the lowest estimate and `final.pt` the last step with its own estimate, that they are the same weights exactly when the last step was the best and different otherwise, and that both have the config, tokenizer and seed. In `tests/test_seeds.py`: `compare` pairs each run with its last step and gets the differences, spread and win counts right, and refuses lists of different lengths; `final_path` errors for checkpoints without a `final.pt`, including the committed one; and `seeds.py --pick both` trains two seeds and prints all three tables, and `--pick final` scores only `final.pt`. 121 tests pass.
+
+**Next.** Make `--pick final` the default for `seeds.py`, or drop the 50-batch pick altogether for schedules that decay, and rerun the earlier comparisons on the last step. The committed `checkpoints/ckpt.pt` and the demo stay as they are for now.
+
 ## 2026-11-23: How much does the seed move the result?
 
 **Why.** The last three entries compared single runs: warmup + cosine decay against a constant rate, tied against separate weights, BPE against characters. Each run is one draw. The seed sets the starting weights, the order of the random batches and the dropout masks, so I had no idea whether a 0.010 bits-per-character gap was a real effect or just a different draw. Yesterday's entry ended on exactly that question.

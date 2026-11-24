@@ -77,3 +77,39 @@ def test_train_runs_with_warmup_cosine_and_clipping(tmp_path):
     assert ckpt["warmup_iters"] == 2
     assert ckpt["grad_clip"] == 0.5
     assert ckpt["learning_rate"] == 1e-3
+
+
+@pytest.mark.parametrize("lr, best_is_last", [(0.05, True), (0.3, False)])
+def test_train_keeps_the_best_estimated_step_and_the_last_step(tmp_path, lr, best_is_last):
+    # At 0.05 the tiny model keeps improving, so the last step is also the best one. At 0.3 the
+    # rate is far too high and every step makes it worse, so ckpt.pt keeps an earlier step.
+    data = tmp_path / "tiny.txt"
+    data.write_text("To be, or not to be, that is the question.\n" * 40, encoding="utf-8")
+    out = tmp_path / "run"
+    cmd = [
+        sys.executable, os.path.join(ROOT, "train.py"), "--config", "small", "--data", str(data),
+        "--out", str(out), "--device", "cpu", "--max-iters", "12", "--eval-interval", "3",
+        "--eval-iters", "2", "--batch-size", "4", "--block-size", "8", "--n-embd", "16",
+        "--n-head", "2", "--n-layer", "1", "--learning-rate", str(lr),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=tmp_path, timeout=120)
+    assert result.returncode == 0, result.stderr
+    assert "final.pt" in result.stdout
+
+    best = torch.load(out / "ckpt.pt", map_location="cpu", weights_only=False)
+    final = torch.load(out / "final.pt", map_location="cpu", weights_only=False)
+    history = final["history"]
+    assert [h["step"] for h in history] == [0, 3, 6, 9, 12]
+    # final.pt is the last step with that step's estimate; ckpt.pt is the step with the lowest estimate.
+    assert final["step"] == 12 and final["val_loss"] == history[-1]["val"]
+    lowest = min(history, key=lambda h: h["val"])
+    assert best["step"] == lowest["step"] and best["val_loss"] == lowest["val"]
+    assert f"best val loss {lowest['val']:.4f} (step {lowest['step']})" in result.stdout
+    # The same weights exactly when the last step was the best one, different weights otherwise.
+    assert (best["step"] == final["step"]) == best_is_last
+    same = all(torch.equal(best["model"][k], final["model"][k]) for k in final["model"])
+    assert same == best_is_last
+    # Both carry everything the other scripts need to rebuild the model.
+    for ckpt in (best, final):
+        assert ckpt["model_config"] == final["model_config"] and ckpt["tokenizer"] == final["tokenizer"]
+        assert ckpt["seed"] == 1337 and ckpt["max_iters"] == 12

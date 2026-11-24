@@ -1,0 +1,112 @@
+=== constant_seed1: train.py --config small --max-iters 5000 --eval-interval 500 --seed 1 --out checkpoints/pick/constant_seed1
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+step     0 | train loss 4.2634 | val loss 4.2642 | 0.1 min
+step   500 | train loss 1.8940 | val loss 1.9895 | 2.4 min | grad norm 0.99
+step  1000 | train loss 1.6802 | val loss 1.8473 | 4.7 min | grad norm 1.06
+step  1500 | train loss 1.5973 | val loss 1.7617 | 6.3 min | grad norm 0.98
+step  2000 | train loss 1.5402 | val loss 1.7160 | 7.9 min | grad norm 0.94
+step  2500 | train loss 1.5019 | val loss 1.6685 | 9.5 min | grad norm 0.88
+step  3000 | train loss 1.4596 | val loss 1.6459 | 11.0 min | grad norm 0.85
+step  3500 | train loss 1.4500 | val loss 1.6434 | 12.7 min | grad norm 0.81
+step  4000 | train loss 1.4252 | val loss 1.6099 | 14.3 min | grad norm 0.78
+step  4500 | train loss 1.4208 | val loss 1.6034 | 16.0 min | grad norm 0.76
+step  5000 | train loss 1.4103 | val loss 1.6040 | 17.7 min | grad norm 0.73
+done in 17.7 min | best val loss 1.6034 (step 4500)
+checkpoint saved to checkpoints/pick/constant_seed1/ckpt.pt | last step saved to checkpoints/pick/constant_seed1/final.pt
+
+=== constant_seed1337: train.py --config small --max-iters 5000 --eval-interval 500 --seed 1337 --out checkpoints/pick/constant_seed1337
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+step     0 | train loss 4.2215 | val loss 4.2221 | 0.1 min
+step   500 | train loss 1.9020 | val loss 1.9990 | 1.7 min | grad norm 1.12
+step  1000 | train loss 1.6910 | val loss 1.8352 | 3.4 min | grad norm 1.15
+step  1500 | train loss 1.6029 | val loss 1.7763 | 5.1 min | grad norm 1.03
+step  2000 | train loss 1.5579 | val loss 1.7306 | 6.8 min | grad norm 0.96
+step  2500 | train loss 1.5115 | val loss 1.6988 | 8.4 min | grad norm 0.92
+step  3000 | train loss 1.4824 | val loss 1.6743 | 10.1 min | grad norm 0.88
+step  3500 | train loss 1.4638 | val loss 1.6564 | 11.7 min | grad norm 0.84
+step  4000 | train loss 1.4371 | val loss 1.6287 | 13.3 min | grad norm 0.81
+step  4500 | train loss 1.4223 | val loss 1.6060 | 14.9 min | grad norm 0.78
+step  5000 | train loss 1.4072 | val loss 1.6211 | 16.5 min | grad norm 0.75
+done in 16.5 min | best val loss 1.6060 (step 4500)
+checkpoint saved to checkpoints/pick/constant_seed1337/ckpt.pt | last step saved to checkpoints/pick/constant_seed1337/final.pt
+
+=== cosine_seed1: train.py --config small --max-iters 5000 --eval-interval 500 --seed 1 --lr-schedule cosine --out checkpoints/pick/cosine_seed1
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+lr schedule: cosine (peak 0.001, 100 warmup steps, final 0.0001) | grad clip: off
+step     0 | train loss 4.2634 | val loss 4.2642 | 0.1 min
+step   500 | train loss 1.9015 | val loss 1.9913 | 2.3 min | lr 9.85e-04 | grad norm 1.08
+step  1000 | train loss 1.6842 | val loss 1.8356 | 4.7 min | lr 9.27e-04 | grad norm 1.10
+step  1500 | train loss 1.5920 | val loss 1.7594 | 6.3 min | lr 8.31e-04 | grad norm 1.04
+step  2000 | train loss 1.5266 | val loss 1.7073 | 7.9 min | lr 7.06e-04 | grad norm 1.00
+step  2500 | train loss 1.4827 | val loss 1.6622 | 9.5 min | lr 5.65e-04 | grad norm 0.99
+step  3000 | train loss 1.4354 | val loss 1.6452 | 11.1 min | lr 4.22e-04 | grad norm 0.98
+step  3500 | train loss 1.4172 | val loss 1.6143 | 12.7 min | lr 2.93e-04 | grad norm 0.98
+step  4000 | train loss 1.3849 | val loss 1.5854 | 14.4 min | lr 1.89e-04 | grad norm 1.00
+step  4500 | train loss 1.3833 | val loss 1.5768 | 16.1 min | lr 1.23e-04 | grad norm 1.01
+step  5000 | train loss 1.3733 | val loss 1.5800 | 17.7 min | lr 1.00e-04 | grad norm 1.02
+done in 17.7 min | best val loss 1.5768 (step 4500)
+checkpoint saved to checkpoints/pick/cosine_seed1/ckpt.pt | last step saved to checkpoints/pick/cosine_seed1/final.pt
+
+=== cosine_seed1337: train.py --config small --max-iters 5000 --eval-interval 500 --seed 1337 --lr-schedule cosine --out checkpoints/pick/cosine_seed1337
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+lr schedule: cosine (peak 0.001, 100 warmup steps, final 0.0001) | grad clip: off
+step     0 | train loss 4.2215 | val loss 4.2221 | 0.1 min
+step   500 | train loss 1.8925 | val loss 1.9846 | 1.7 min | lr 9.85e-04 | grad norm 1.14
+step  1000 | train loss 1.6851 | val loss 1.8243 | 3.5 min | lr 9.27e-04 | grad norm 1.12
+step  1500 | train loss 1.5926 | val loss 1.7598 | 5.2 min | lr 8.31e-04 | grad norm 1.05
+step  2000 | train loss 1.5391 | val loss 1.7104 | 6.9 min | lr 7.06e-04 | grad norm 1.01
+step  2500 | train loss 1.4834 | val loss 1.6723 | 8.5 min | lr 5.65e-04 | grad norm 1.00
+step  3000 | train loss 1.4422 | val loss 1.6358 | 10.2 min | lr 4.22e-04 | grad norm 1.00
+step  3500 | train loss 1.4178 | val loss 1.6145 | 11.8 min | lr 2.93e-04 | grad norm 1.01
+step  4000 | train loss 1.3886 | val loss 1.5856 | 13.4 min | lr 1.89e-04 | grad norm 1.02
+step  4500 | train loss 1.3773 | val loss 1.5639 | 15.0 min | lr 1.23e-04 | grad norm 1.04
+step  5000 | train loss 1.3635 | val loss 1.5816 | 16.7 min | lr 1.00e-04 | grad norm 1.05
+done in 16.7 min | best val loss 1.5639 (step 4500)
+checkpoint saved to checkpoints/pick/cosine_seed1337/ckpt.pt | last step saved to checkpoints/pick/cosine_seed1337/final.pt
+
+=== python seeds.py --pick both --ckpts checkpoints/pick/{constant,cosine}_seed{1,1337}/ckpt.pt
+
+scoring 4 run(s) on the validation split (111,540 characters)
+
+Best estimated step (ckpt.pt):
+
+| Checkpoint | Seed | Step | Loss/token | Bits/char |
+|---|---|---|---|---|
+| `checkpoints/pick/constant_seed1/ckpt.pt` | 1 | 4500 | 1.6067 | 2.318 |
+| `checkpoints/pick/constant_seed1337/ckpt.pt` | 1337 | 4500 | 1.6167 | 2.332 |
+| `checkpoints/pick/cosine_seed1/ckpt.pt` | 1 | 4500 | 1.5823 | 2.283 |
+| `checkpoints/pick/cosine_seed1337/ckpt.pt` | 1337 | 4500 | 1.5750 | 2.272 |
+
+bits/char over 4 runs: mean 2.301 | std 0.029 | range 2.272 - 2.332 (0.060)
+loss/token over 4 runs: mean 1.5952 | std 0.0198 | range 1.5750 - 1.6167 (0.0418)
+
+Last step (final.pt):
+
+| Checkpoint | Seed | Step | Loss/token | Bits/char |
+|---|---|---|---|---|
+| `checkpoints/pick/constant_seed1/final.pt` | 1 | 5000 | 1.5977 | 2.305 |
+| `checkpoints/pick/constant_seed1337/final.pt` | 1337 | 5000 | 1.6074 | 2.319 |
+| `checkpoints/pick/cosine_seed1/final.pt` | 1 | 5000 | 1.5756 | 2.273 |
+| `checkpoints/pick/cosine_seed1337/final.pt` | 1337 | 5000 | 1.5693 | 2.264 |
+
+bits/char over 4 runs: mean 2.290 | std 0.026 | range 2.264 - 2.319 (0.055)
+loss/token over 4 runs: mean 1.5875 | std 0.0180 | range 1.5693 - 1.6074 (0.0381)
+
+Picked step against last step:
+
+| Run | Seed | Picked step | Bits/char (picked) | Bits/char (last step) | Last - picked |
+|---|---|---|---|---|---|
+| `checkpoints/pick/constant_seed1` | 1 | 4500 | 2.318 | 2.305 | -0.013 |
+| `checkpoints/pick/constant_seed1337` | 1337 | 4500 | 2.332 | 2.319 | -0.014 |
+| `checkpoints/pick/cosine_seed1` | 1 | 4500 | 2.283 | 2.273 | -0.010 |
+| `checkpoints/pick/cosine_seed1337` | 1337 | 4500 | 2.272 | 2.264 | -0.008 |
+
+last - picked over 4 runs: mean -0.011 | std 0.003 | last step better in 4, picked step better in 0, the same step in 0
