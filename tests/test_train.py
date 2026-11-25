@@ -6,7 +6,9 @@ import sys
 import pytest
 import torch
 
-from train import get_lr
+from data import split_text
+from evaluate import evaluate_text, load_checkpoint
+from train import full_validation_line, get_lr
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -113,3 +115,45 @@ def test_train_keeps_the_best_estimated_step_and_the_last_step(tmp_path, lr, bes
     for ckpt in (best, final):
         assert ckpt["model_config"] == final["model_config"] and ckpt["tokenizer"] == final["tokenizer"]
         assert ckpt["seed"] == 1337 and ckpt["max_iters"] == 12
+
+
+@pytest.mark.parametrize("lr, best_is_last", [(0.05, True), (0.3, False)])
+def test_train_scores_both_checkpoints_on_the_whole_validation_split(tmp_path, lr, best_is_last):
+    data = tmp_path / "tiny.txt"
+    text = "To be, or not to be, that is the question.\n" * 40
+    data.write_text(text, encoding="utf-8")
+    out = tmp_path / "run"
+    cmd = [
+        sys.executable, os.path.join(ROOT, "train.py"), "--config", "small", "--data", str(data),
+        "--out", str(out), "--device", "cpu", "--max-iters", "12", "--eval-interval", "3",
+        "--eval-iters", "2", "--batch-size", "4", "--block-size", "8", "--n-embd", "16",
+        "--n-head", "2", "--n-layer", "1", "--learning-rate", str(lr),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=tmp_path, timeout=120)
+    assert result.returncode == 0, result.stderr
+
+    _, val_text = split_text(text)
+    scores = {}
+    for name in ("final.pt", "ckpt.pt"):
+        saved = torch.load(out / name, map_location="cpu", weights_only=False)
+        # The saved score is exactly what evaluate.py gives for the file, with its default stride.
+        model, tok = load_checkpoint(str(out / name), "cpu")
+        r = evaluate_text(model, tok, val_text)
+        assert saved["val_full"] == {"loss": r["loss"], "bits_per_char": r["bits_per_char"],
+                                     "chars": r["chars"], "stride": 8}
+        scores[name] = {"step": saved["step"], **r}
+    line = full_validation_line({"final": scores["final.pt"], "best": scores["ckpt.pt"]}, len(val_text))
+    assert line in result.stdout
+    assert line.startswith(f"full validation split ({len(val_text):,} chars): last step 12 ")
+    assert ("ckpt.pt is the same step" in line) == best_is_last
+    if not best_is_last:
+        assert "last - picked" in line
+
+    # The sample written after training doesn't depend on the extra evaluation.
+    skipped = tmp_path / "skipped"
+    result2 = subprocess.run([*cmd[:cmd.index("--out") + 1], str(skipped), *cmd[cmd.index("--out") + 2:],
+                              "--no-full-eval"], capture_output=True, text=True, cwd=tmp_path, timeout=120)
+    assert result2.returncode == 0, result2.stderr
+    assert "full validation split" not in result2.stdout
+    assert "val_full" not in torch.load(skipped / "final.pt", map_location="cpu", weights_only=False)
+    assert (skipped / "sample.txt").read_text(encoding="utf-8") == (out / "sample.txt").read_text(encoding="utf-8")

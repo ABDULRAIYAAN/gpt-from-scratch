@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-11-25: An exact validation score at the end of every training run
+
+**Why.** Yesterday `train.py` started keeping the last step (`final.pt`) as well as the step with the best estimated validation loss (`ckpt.pt`). But the training log still ended with the 50-batch estimate, and finding out which of the two was really better meant a separate `evaluate.py` run (or a `seeds.py --pick both` sweep). The number I actually compare runs with should be in the log of every run.
+
+**What changed.** When training ends, `train.py` now scores `final.pt` and `ckpt.pt` on the whole validation split with `evaluate_text`, the same function `evaluate.py` uses, so every token is scored exactly once with back-to-back 64-character windows. It prints one line with both scores and the difference, and saves the score in each checkpoint as `val_full` (loss per token, bits per character, the number of characters and the stride). The last step is scored from the model already in memory; the picked step is loaded back from `ckpt.pt` only if it is a different step, into a copy of the model. My first version built a fresh `GPT` for it instead, and a test caught that this changed the sample written after training: building a model draws its random starting weights, which moves the random state on. `--no-full-eval` skips the whole thing, for a validation text too large to score quickly.
+
+`seeds.py` now scores the last step by default (`--pick final`), which is what yesterday's results pointed to. A run from before `final.pt` existed only has `ckpt.pt`, so the default scores that one and prints a note; `--pick both` still refuses it, because there is nothing to compare it with.
+
+**Numbers.** I reran seed 1 of both schedules (`small` config, 5,000 steps, two at a time with one thread each on the 2-core CPU, 18.5-18.6 minutes each). Both runs reproduced yesterday's logs exactly, and they now end with:
+
+| Run | Picked step | Bits/char, picked | Bits/char, last step | Last - picked |
+|---|---|---|---|---|
+| Constant, seed 1 | 4500 | 2.318 | 2.305 | -0.013 |
+| Warmup + cosine, seed 1 | 4500 | 2.283 | 2.273 | -0.010 |
+
+`evaluate.py` gives the same four numbers for the four files. Scoring one checkpoint of the small model takes 2.7 seconds on one core (1.6 seconds on two), so the two together add under half a percent to an 18-minute run. The logs are in `results/full_eval.txt`.
+
+**Tests.** In `tests/test_train.py`, a tiny run at two learning rates (one where the last step is the best and one where it isn't) checks that the `val_full` saved in each checkpoint is exactly what `evaluate_text` gives for that file, that the printed line matches, that it says "the same step" only when it is, and that a run with `--no-full-eval` saves no score and writes exactly the same sample. In `tests/test_seeds.py`, the default now scores `final.pt`, falls back to `ckpt.pt` with a note for the committed checkpoint, and `--pick both` refuses a run with no `final.pt`. All 124 tests pass.
+
+**Next.** The roadmap's other open item that fits a CPU is training on a different text, such as Malay. That needs a Malay corpus with a clear licence, which I haven't picked yet.
+
 ## 2026-11-24: Keeping the last step as well as the best-estimated one
 
 **Why.** Yesterday's sweep showed that `train.py` sometimes saves step 4,500 instead of step 5,000. It keeps whichever step had the lowest *estimated* validation loss, and that estimate is only 50 random batches, too noisy to tell apart two evals a few thousandths of a nat apart. With the cosine schedule the last 500 steps run at the lowest learning rate, so throwing them away on a noisy estimate seemed wrong, and it adds noise to every comparison in the README.

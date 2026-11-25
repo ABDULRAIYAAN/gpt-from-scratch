@@ -1,0 +1,84 @@
+=== constant_seed1: train.py --config small --max-iters 5000 --eval-interval 500 --seed 1 --out checkpoints/full_eval/constant_seed1
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+step     0 | train loss 4.2634 | val loss 4.2642 | 0.1 min
+step   500 | train loss 1.8940 | val loss 1.9895 | 2.1 min | grad norm 0.99
+step  1000 | train loss 1.6802 | val loss 1.8473 | 4.1 min | grad norm 1.06
+step  1500 | train loss 1.5973 | val loss 1.7617 | 6.2 min | grad norm 0.98
+step  2000 | train loss 1.5402 | val loss 1.7160 | 8.0 min | grad norm 0.94
+step  2500 | train loss 1.5019 | val loss 1.6685 | 9.7 min | grad norm 0.88
+step  3000 | train loss 1.4596 | val loss 1.6459 | 11.5 min | grad norm 0.85
+step  3500 | train loss 1.4500 | val loss 1.6434 | 13.3 min | grad norm 0.81
+step  4000 | train loss 1.4252 | val loss 1.6099 | 15.0 min | grad norm 0.78
+step  4500 | train loss 1.4208 | val loss 1.6034 | 16.8 min | grad norm 0.76
+step  5000 | train loss 1.4103 | val loss 1.6040 | 18.6 min | grad norm 0.73
+
+done in 18.6 min | best val loss 1.6034 (step 4500)
+checkpoint saved to checkpoints/full_eval/constant_seed1/ckpt.pt | last step saved to checkpoints/full_eval/constant_seed1/final.pt
+full validation split (111,540 chars): last step 5000 2.305 bits/char (loss 1.5977) | picked step 4500 2.318 bits/char (loss 1.6067) | last - picked -0.013
+
+--- sample ---
+
+CAparce of jest. But to York?
+Methanks you would shall keep have I my rememblance.
+
+WARWICK:
+My most brother, if the gods, wheth on the cruest!
+
+First Senator:
+Truthough he I may would thou art for the lipt way ay:
+And For sweet buckle and whisely give the common;
+And I will thou hast fight  world had know well:
+How susparish red, sir, and I will'd by senced.
+
+GLOUCESTER:
+My dead madam cast of a cat slue more, since a blood, when they
+sever ay, and I cannot unackle and dead the vall'd or watchether
+'Both as a harm: bold's if shall resembled,
+And and to Romeo shall be bright behuld begin as I,
+
+=== cosine_seed1: train.py --config small --max-iters 5000 --eval-interval 500 --seed 1 --lr-schedule cosine --out checkpoints/full_eval/cosine_seed1
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+lr schedule: cosine (peak 0.001, 100 warmup steps, final 0.0001) | grad clip: off
+step     0 | train loss 4.2634 | val loss 4.2642 | 0.1 min
+step   500 | train loss 1.9015 | val loss 1.9913 | 2.0 min | lr 9.85e-04 | grad norm 1.08
+step  1000 | train loss 1.6842 | val loss 1.8356 | 4.0 min | lr 9.27e-04 | grad norm 1.10
+step  1500 | train loss 1.5920 | val loss 1.7594 | 6.0 min | lr 8.31e-04 | grad norm 1.04
+step  2000 | train loss 1.5266 | val loss 1.7073 | 7.8 min | lr 7.06e-04 | grad norm 1.00
+step  2500 | train loss 1.4827 | val loss 1.6622 | 9.6 min | lr 5.65e-04 | grad norm 0.99
+step  3000 | train loss 1.4354 | val loss 1.6452 | 11.4 min | lr 4.22e-04 | grad norm 0.98
+step  3500 | train loss 1.4172 | val loss 1.6143 | 13.1 min | lr 2.93e-04 | grad norm 0.98
+step  4000 | train loss 1.3849 | val loss 1.5854 | 14.9 min | lr 1.89e-04 | grad norm 1.00
+step  4500 | train loss 1.3833 | val loss 1.5768 | 16.6 min | lr 1.23e-04 | grad norm 1.01
+step  5000 | train loss 1.3733 | val loss 1.5800 | 18.5 min | lr 1.00e-04 | grad norm 1.02
+
+done in 18.5 min | best val loss 1.5768 (step 4500)
+checkpoint saved to checkpoints/full_eval/cosine_seed1/ckpt.pt | last step saved to checkpoints/full_eval/cosine_seed1/final.pt
+full validation split (111,540 chars): last step 5000 2.273 bits/char (loss 1.5756) | picked step 4500 2.283 bits/char (loss 1.5823) | last - picked -0.010
+
+--- sample ---
+
+Coquerous Lord Marcius? You are his door part
+As she give no more. Come, I do not into Honour.
+
+MONTAGUE:
+I should not well be spoked
+Because him look an your scrows for his lords,
+But thou art for the light appay with Forward;
+Thus very then sworthing the commony plone within of his;
+But do move your knight,
+And ours
+That your doble chance.
+
+BUKE OF AUMERLE:
+You spoke some troat thou artst of a cat of,
+We are son? and thou heaven'st does bid most
+veice wing day thine own and govel,
+With small them 'follows,' have a bloody favours,
+He are designion the pate-bloody but my capes.
+
+DUKE VINCENTI
+

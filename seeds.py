@@ -17,12 +17,15 @@ Usage:
     # summarise checkpoints that are already trained (e.g. the same recipe from earlier runs)
     python seeds.py --ckpts checkpoints/seeds/cosine/seed1/ckpt.pt checkpoints/cosine/ckpt.pt
 
-    # score the last step of each run (final.pt) as well as the best-estimated step (ckpt.pt)
+    # score the best-estimated step of each run (ckpt.pt) as well as the last step (final.pt)
     python seeds.py --pick both --ckpts checkpoints/seeds/cosine/seed*/ckpt.pt
 
 train.py keeps two checkpoints per run: ckpt.pt, the step whose validation loss looked best on a
 small random sample, and final.pt, the weights after the last step. --pick chooses which one is
-scored; "both" scores the two and prints how much the choice moved each run.
+scored; "both" scores the two and prints how much the choice moved each run. The default is
+"final": in every run so far where the two differed, the last step was the better model, and
+scoring it keeps the noisy pick out of the comparison. A run trained before final.pt existed only
+has ckpt.pt, so that is scored instead, with a note.
 
 Seeds whose checkpoint already exists are not trained again unless --retrain is given, so an
 interrupted sweep can be restarted with the same command.
@@ -119,9 +122,18 @@ def final_path(ckpt: str) -> str:
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"no final.pt next to {ckpt}; it was trained before train.py kept the last step, "
-            f"so only --pick best works for it"
+            f"so --pick both can't compare it (--pick best scores its ckpt.pt)"
         )
     return path
+
+
+def final_or_ckpt(ckpt: str) -> str:
+    """final.pt next to ckpt if there is one, else ckpt itself (a run from before final.pt existed)."""
+    try:
+        return final_path(ckpt)
+    except FileNotFoundError:
+        print(f"note: no final.pt next to {ckpt} (trained before train.py kept the last step), scoring it instead")
+        return ckpt
 
 
 def compare(best: list[dict], final: list[dict]) -> str:
@@ -163,8 +175,8 @@ def main():
     p.add_argument("--data", default=DEFAULT_PATH, help="text to train on and validate with")
     p.add_argument("--stride", type=int, default=None, help="evaluate.py window step (default: block_size)")
     p.add_argument("--device", default="auto", help="device for scoring (train.py has its own --device)")
-    p.add_argument("--pick", choices=["best", "final", "both"], default="best",
-                   help="score ckpt.pt (best estimated val loss), final.pt (last step) or both")
+    p.add_argument("--pick", choices=["final", "best", "both"], default="final",
+                   help="score final.pt (last step, the default), ckpt.pt (best estimated val loss) or both")
     args = p.parse_args(own_args)
 
     if not args.seeds and not args.ckpts:
@@ -177,7 +189,10 @@ def main():
              for s in (args.seeds or [])]
     paths += args.ckpts
 
-    finals = [final_path(path) for path in paths] if args.pick != "best" else []
+    if args.pick == "final":
+        finals = [final_or_ckpt(path) for path in paths]
+    elif args.pick == "both":
+        finals = [final_path(path) for path in paths]  # comparing needs both files for every run
     _, val_text = split_text(load_dataset(args.data))  # the same characters train.py validates on
     device = pick_device(args.device)
     print(f"\nscoring {len(paths)} run(s) on the validation split ({len(val_text):,} characters)\n")

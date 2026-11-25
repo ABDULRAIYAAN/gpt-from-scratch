@@ -11,10 +11,13 @@ Usage:
     python train.py --config small --tie-weights                          # one matrix for embedding and output
 
 Two checkpoints are written to --out: ckpt.pt holds the step with the best estimated validation
-loss, final.pt the weights after the last step.
+loss, final.pt the weights after the last step. When training ends, both are scored on the whole
+validation split (the same exact number evaluate.py prints), and the score is saved in each
+checkpoint under "val_full". --no-full-eval skips that, e.g. for a very large validation text.
 """
 
 import argparse
+import copy
 import math
 import os
 import time
@@ -23,6 +26,7 @@ from dataclasses import asdict
 import torch
 
 from data import DEFAULT_PATH, get_batch, load_dataset, pick_device, split_text
+from evaluate import evaluate_text
 from model import GPT, GPTConfig
 from tokenizer import BPETokenizer, CharTokenizer
 
@@ -59,6 +63,8 @@ def parse_args():
                    help="clip the gradient's global norm to this value before each step (0 = off)")
     p.add_argument("--tie-weights", action="store_true",
                    help="share one matrix between the token embedding and the output layer")
+    p.add_argument("--no-full-eval", action="store_true",
+                   help="don't score ckpt.pt and final.pt on the whole validation split at the end")
     # Any preset value can be overridden from the command line.
     for k, v in PRESETS["full"].items():
         p.add_argument(f"--{k.replace('_', '-')}", type=type(v), default=None)
@@ -106,6 +112,52 @@ def estimate_loss(model, splits, cfg, device):
         out[name] = losses.mean().item()
     model.train()
     return out
+
+
+def full_validation(model, model_cfg, tok, val_text, out_dir, best_step, last_step, device):
+    """Score final.pt and ckpt.pt on every token of val_text and save the score in each file.
+
+    The losses printed during training are estimates over eval_iters random batches, too noisy to
+    tell apart two steps a few thousandths of a nat apart, which is how ckpt.pt sometimes keeps an
+    earlier step than the last one. evaluate_text scores each validation token exactly once with
+    back-to-back block_size windows, so this is the same exact number `python evaluate.py` gives,
+    without a separate run. `model` holds the last step's weights; the picked step is loaded back
+    from ckpt.pt only when it is a different step.
+
+    Each checkpoint gets a "val_full" entry: {"loss", "bits_per_char", "chars", "stride"}.
+    Returns {"final": ..., "best": ...} with the step and the evaluate_text result for each.
+    """
+    final = {"step": last_step, **evaluate_text(model, tok, val_text)}
+    if best_step == last_step:
+        best = final  # the same weights, so the same score
+    else:
+        # A copy rather than GPT(model_cfg): building a new model would draw its random initial
+        # weights and move the random state on, which would change the sample written after this.
+        picked = copy.deepcopy(model)
+        picked.load_state_dict(torch.load(os.path.join(out_dir, "ckpt.pt"), map_location=device)["model"])
+        best = {"step": best_step, **evaluate_text(picked, tok, val_text)}
+    for name, r in (("final.pt", final), ("ckpt.pt", best)):
+        path = os.path.join(out_dir, name)
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        ckpt["val_full"] = {
+            "loss": r["loss"],                    # nats per token
+            "bits_per_char": r["bits_per_char"],  # comparable across tokenizers
+            "chars": r["chars"],
+            "stride": model_cfg.block_size,       # evaluate.py's default window step
+        }
+        torch.save(ckpt, path)
+    return {"final": final, "best": best}
+
+
+def full_validation_line(full, n_chars):
+    """One line for the training log: the exact validation score of the last and the picked step."""
+    f, b = full["final"], full["best"]
+    line = (f"full validation split ({n_chars:,} chars): last step {f['step']} "
+            f"{f['bits_per_char']:.3f} bits/char (loss {f['loss']:.4f})")
+    if b["step"] == f["step"]:
+        return line + " | ckpt.pt is the same step"
+    return line + (f" | picked step {b['step']} {b['bits_per_char']:.3f} bits/char (loss {b['loss']:.4f})"
+                   f" | last - picked {f['bits_per_char'] - b['bits_per_char']:+.3f}")
 
 
 def main():
@@ -254,6 +306,11 @@ def main():
 
     print(f"\ndone in {(time.time() - t0) / 60:.1f} min | best val loss {best_val:.4f} (step {best_step})")
     print(f"checkpoint saved to {os.path.join(args.out, 'ckpt.pt')} | last step saved to {os.path.join(args.out, 'final.pt')}")
+
+    # ---- score both checkpoints on the whole validation split ----
+    if not args.no_full_eval:
+        full = full_validation(model, model_cfg, tok, val_text, args.out, best_step, cfg["max_iters"], device)
+        print(full_validation_line(full, len(val_text)))
 
     # ---- sample from the trained model ----
     model.eval()

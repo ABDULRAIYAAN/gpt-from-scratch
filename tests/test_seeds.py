@@ -109,6 +109,8 @@ def test_seeds_summarises_the_committed_checkpoint(tmp_path):
         pytest.skip("Tiny Shakespeare not downloaded")
     result = run(["--ckpts", CKPT, "--device", "cpu"], tmp_path)
     assert result.returncode == 0, result.stderr
+    # --pick final is the default; this run has no final.pt, so its ckpt.pt is scored, with a note.
+    assert "note: no final.pt next to" in result.stdout
     assert "| ? | " in result.stdout
     assert "| 2.327 |" in result.stdout  # the README's number for this checkpoint
     assert "bits/char over 1 run: mean 2.327 | std n/a (one run)" in result.stdout
@@ -138,7 +140,7 @@ def test_compare_pairs_each_run_with_its_last_step():
 
 def test_final_path_needs_a_final_checkpoint(tmp_path):
     (tmp_path / "ckpt.pt").write_bytes(b"")
-    with pytest.raises(FileNotFoundError, match="only --pick best"):
+    with pytest.raises(FileNotFoundError, match="--pick both can't compare it"):
         final_path(str(tmp_path / "ckpt.pt"))
     (tmp_path / "final.pt").write_bytes(b"")
     assert final_path(str(tmp_path / "ckpt.pt")) == str(tmp_path / "final.pt")
@@ -161,3 +163,18 @@ def test_seeds_scores_the_last_step_too(tmp_path):
                       "--pick", "final"], tmp_path)
     assert final_only.returncode == 0, final_only.stderr
     assert "seed5/final.pt` | 5 | 4 |" in final_only.stdout and "ckpt.pt`" not in final_only.stdout
+
+
+def test_the_default_pick_is_the_last_step(tmp_path):
+    data = tiny_text(tmp_path)
+    out = tmp_path / "sweep"
+    result = run(["--seeds", "9", "--out", str(out), "--data", str(data), "--device", "cpu",
+                  "--", *TINY_TRAIN], tmp_path)
+    assert result.returncode == 0, result.stderr
+    table = result.stdout[result.stdout.index("| Checkpoint |"):]
+    assert "seed9/final.pt` | 9 | 4 |" in table and "ckpt.pt`" not in table
+    # --pick both still refuses a run with no final.pt, as there is nothing to compare it with.
+    (out / "seed9" / "final.pt").unlink()
+    both = run(["--ckpts", str(out / "seed9" / "ckpt.pt"), "--data", str(data), "--device", "cpu",
+                "--pick", "both"], tmp_path)
+    assert both.returncode != 0 and "--pick both can't compare it" in both.stderr
