@@ -1,0 +1,44 @@
+# Resume check: small config, 2,000 steps, 1 CPU thread each (OMP_NUM_THREADS=1), seed 1337
+# The same run trained in one go, and cut off at step 1000 then continued with --resume.
+# Both end with bit-identical ckpt.pt and final.pt weights, history, val_full and sample.txt.
+
+## python train.py --config small --device cpu --max-iters 2000 --eval-interval 250 --out whole
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+step     0 | train loss 4.2215 | val loss 4.2221 | 0.1 min
+step   250 | train loss 2.1670 | val loss 2.1874 | 1.0 min | grad norm 0.99
+step   500 | train loss 1.8923 | val loss 1.9970 | 2.6 min | grad norm 1.27
+step   750 | train loss 1.7681 | val loss 1.9024 | 4.4 min | grad norm 1.18
+step  1000 | train loss 1.6767 | val loss 1.8400 | 6.2 min | grad norm 1.11
+step  1250 | train loss 1.6362 | val loss 1.8139 | 8.0 min | grad norm 1.06
+step  1500 | train loss 1.6066 | val loss 1.7838 | 9.9 min | grad norm 1.01
+step  1750 | train loss 1.5551 | val loss 1.7588 | 11.5 min | grad norm 0.99
+step  2000 | train loss 1.5531 | val loss 1.7535 | 12.4 min | grad norm 0.95
+done in 12.4 min | best val loss 1.7535 (step 2000)
+checkpoint saved to whole/ckpt.pt | last step saved to whole/final.pt
+full validation split (111,540 chars): last step 2000 2.497 bits/char (loss 1.7305) | ckpt.pt is the same step
+
+## same command with --out cut --stop-at 1000
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+step     0 | train loss 4.2215 | val loss 4.2221 | 0.1 min
+step   250 | train loss 2.1670 | val loss 2.1874 | 1.1 min | grad norm 0.99
+step   500 | train loss 1.8923 | val loss 1.9970 | 2.9 min | grad norm 1.27
+step   750 | train loss 1.7681 | val loss 1.9024 | 4.7 min | grad norm 1.18
+step  1000 | train loss 1.6767 | val loss 1.8400 | 6.5 min | grad norm 1.11
+stopping at step 1000 as asked; carry on with the same command and --resume
+
+## same command with --out cut --resume
+dataset: 1,115,394 chars -> 1,115,394 tokens (1.00 chars/token) | vocab size: 65 | tokenizer: char | device: cpu
+model: 0.82M parameters | config: small
+random-guess loss would be ln(65) = 4.1744
+resuming from step 1000 of 2000 (6.5 min trained so far, cut/resume.pt)
+step  1250 | train loss 1.6362 | val loss 1.8139 | 8.3 min | grad norm 1.06
+step  1500 | train loss 1.6066 | val loss 1.7838 | 10.1 min | grad norm 1.01
+step  1750 | train loss 1.5551 | val loss 1.7588 | 11.4 min | grad norm 0.99
+step  2000 | train loss 1.5531 | val loss 1.7535 | 12.3 min | grad norm 0.95
+done in 12.3 min | best val loss 1.7535 (step 2000)
+checkpoint saved to cut/ckpt.pt | last step saved to cut/final.pt
+full validation split (111,540 chars): last step 2000 2.497 bits/char (loss 1.7305) | ckpt.pt is the same step

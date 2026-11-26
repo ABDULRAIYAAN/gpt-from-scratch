@@ -27,8 +27,9 @@ scored; "both" scores the two and prints how much the choice moved each run. The
 scoring it keeps the noisy pick out of the comparison. A run trained before final.pt existed only
 has ckpt.pt, so that is scored instead, with a note.
 
-Seeds whose checkpoint already exists are not trained again unless --retrain is given, so an
-interrupted sweep can be restarted with the same command.
+Seeds that finished training are not trained again unless --retrain is given, and a seed that
+was cut off part-way carries on from its last evaluation (train.py --resume), so an interrupted
+sweep can be restarted with the same command.
 """
 
 import argparse
@@ -41,10 +42,11 @@ import torch
 
 from data import DEFAULT_PATH, load_dataset, pick_device, split_text
 from evaluate import evaluate_text, load_checkpoint
+from train import RESUME_FILE
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 # train.py arguments this script sets itself, so they must not be passed after "--"
-RESERVED = ("--seed", "--out", "--data")
+RESERVED = ("--seed", "--out", "--data", "--resume", "--stop-at")
 
 
 def spread(values: list[float]) -> dict:
@@ -64,16 +66,27 @@ def train_seed(seed: int, out_dir: str, train_args: list[str], data: str, retrai
     """Run train.py with this seed into out_dir and return the checkpoint path.
 
     train.py's output is printed as it arrives and also saved to out_dir/train_log.txt.
+
+    A run is finished when final.pt exists. train.py writes ckpt.pt at the very first
+    evaluation, so ckpt.pt alone doesn't mean the run is done: if resume.pt is there too, the run
+    was cut off and is continued from it, and its log is appended to. ckpt.pt with neither file
+    is a run from before train.py kept the last step, which is used as it is.
     """
     ckpt = os.path.join(out_dir, "ckpt.pt")
-    if os.path.exists(ckpt) and not retrain:
+    resume = os.path.join(out_dir, RESUME_FILE)
+    finished = os.path.exists(os.path.join(out_dir, "final.pt")) or (
+        os.path.exists(ckpt) and not os.path.exists(resume))
+    if finished and not retrain:
         print(f"seed {seed}: {ckpt} already exists, not training it again")
         return ckpt
+    resuming = os.path.exists(resume) and not retrain
     os.makedirs(out_dir, exist_ok=True)
     cmd = [sys.executable, "-u", os.path.join(ROOT, "train.py"), *train_args,
            "--seed", str(seed), "--out", out_dir, "--data", data]
-    print(f"seed {seed}: {' '.join(cmd[2:])}")
-    with open(os.path.join(out_dir, "train_log.txt"), "w", encoding="utf-8") as log:
+    if not retrain:
+        cmd.append("--resume")  # carries on from resume.pt if a run was cut off, else starts at step 0
+    print(f"seed {seed}: {'resuming the interrupted run: ' if resuming else ''}{' '.join(cmd[2:])}")
+    with open(os.path.join(out_dir, "train_log.txt"), "a" if resuming else "w", encoding="utf-8") as log:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         for line in proc.stdout:
             print(line, end="")

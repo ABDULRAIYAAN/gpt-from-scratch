@@ -126,6 +126,8 @@ python evaluate.py checkpoints/ckpt.pt checkpoints/bpe/ckpt.pt       # bits per 
 python seeds.py --seeds 1 2 3 --out checkpoints/seeds/cosine -- --config small --max-iters 5000 --lr-schedule cosine
 python seeds.py --pick both --ckpts checkpoints/seeds/cosine/seed*/ckpt.pt   # best-estimated step against the last step
 python train.py --config small --no-full-eval                       # skip scoring the checkpoints on the whole validation split
+python train.py --config full --device cuda --out checkpoints/full --resume   # carry on after a disconnect or crash
+python train.py --config small --stop-at 2500 --out checkpoints/split         # stop half way, then rerun with --resume
 ```
 
 `--tokenizer bpe` learns a byte-pair encoding from the training text (512 tokens by default, set with `--bpe-vocab-size`) and stores it in the checkpoint, so `sample.py` and `app.py` pick it up automatically. On Tiny Shakespeare, 512 BPE tokens cover 1.94 characters each on average, so a 64-token context sees about twice as much text. `web/tokenizer.js` has both tokenizers in JavaScript, giving exactly the same ids as `tokenizer.py`:
@@ -145,11 +147,13 @@ ids.map(id => d.push(id)).join("");            // holds back a character split a
 
 `evaluate.py` takes any number of checkpoints and prints a table with loss per token, bits per token and bits per character on the full validation split (the last 10% of the text). `--stride 32` uses overlapping windows so every token after the first window gets at least 32 tokens of context; this lowers the numbers a little and takes twice as long.
 
-`seeds.py` passes everything after `--` to `train.py`, trains seed N into `<out>/seed<N>/` (with its log in `train_log.txt` there), then prints each run's best step, loss per token and bits per character, and the mean, sample standard deviation and range over the runs. A seed whose checkpoint already exists is skipped, so an interrupted sweep restarts with the same command. `--ckpts` adds checkpoints that are already trained, or summarises them without training anything. `train.py` now saves its `seed` in the checkpoint; older checkpoints show `?`.
+`seeds.py` passes everything after `--` to `train.py`, trains seed N into `<out>/seed<N>/` (with its log in `train_log.txt` there), then prints each run's best step, loss per token and bits per character, and the mean, sample standard deviation and range over the runs. A seed that finished (it has `final.pt`) is skipped, and a seed that was cut off part-way carries on from its `resume.pt`, with the rest of its log appended, so an interrupted sweep restarts with the same command. `--ckpts` adds checkpoints that are already trained, or summarises them without training anything. `train.py` now saves its `seed` in the checkpoint; older checkpoints show `?`.
 
 `train.py` writes two checkpoints: `ckpt.pt`, the step with the lowest estimated validation loss (the estimate is `eval_iters` random batches, so it is a little noisy), and `final.pt`, the weights after the last step. Both load anywhere a checkpoint does. When training ends, it scores both on the whole validation split, the same exact number `evaluate.py` gives, prints one line such as `full validation split (111,540 chars): last step 5000 2.305 bits/char (loss 1.5977) | picked step 4500 2.318 bits/char (loss 1.6067) | last - picked -0.013`, and saves the score in each file as `val_full`. `--no-full-eval` skips it. `seeds.py` scores the last steps (`final.pt`) by default; `--pick best` scores `ckpt.pt` instead, and `--pick both` scores both and prints, run by run, how much the picked step and the last step differ in bits per character. A run trained before `final.pt` existed has only `ckpt.pt`, so the default scores that and says so, and `--pick both` refuses it.
 
-To train the full model on a free GPU, open [`train_colab.ipynb`](train_colab.ipynb) in Google Colab, switch the runtime to a T4 GPU, and run every cell.
+At every evaluation except the last, `train.py` also writes `resume.pt` to `--out`: the weights, AdamW's running averages, the state of the random number generators, the step it got to and the validation history so far. If a run is cut off, rerunning the same command with `--resume` carries on from the last evaluation instead of step 0. On a CPU the resumed run ends with exactly the same `ckpt.pt`, `final.pt`, full-split score and sample as a run that was never interrupted (on a GPU some kernels aren't bit-for-bit deterministic, so it is the same run but not always the same bits). A 2,000-step `small` run stopped at step 1,000 and resumed matched the one trained in one go bit for bit ([`results/resume_check.txt`](results/resume_check.txt)). `--resume` checks that the settings and the training text (by its SHA-256, so the file can move) are the ones the run started with, and lists any that differ instead of mixing two runs. With no `resume.pt` it starts from step 0, so the same command works for the first session and every one after it. `--stop-at N` stops at the first evaluation at or after step N, to split a long run across sessions. `resume.pt` is deleted when the last step is trained; it is about three times the size of a checkpoint (9.9 MB for the `small` model, 130 MB for `full`) and is written to a temporary file first, so a cut-off mid-save leaves the previous one intact.
+
+To train the full model on a free GPU, open [`train_colab.ipynb`](train_colab.ipynb) in Google Colab, switch the runtime to a T4 GPU, and run every cell. The notebook saves to Google Drive and trains with `--resume`, so if the session disconnects, running the cells again picks up from the last evaluation (every 500 steps).
 
 ### Web app and browser demo
 
@@ -183,7 +187,7 @@ pip install pytest
 python -m pytest tests
 ```
 
-The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that the learning-rate schedule warms up, decays to its floor and stays constant when it is off (and that `train.py` runs end to end with it and gradient clipping), that tied weights are one tensor that gets the sum of both gradients, stay tied through an optimizer step and a save and load, and run the same in the browser engine, that the same seed trains exactly the same weights (and another seed doesn't) and `seeds.py` trains, scores and resumes a sweep, that `train.py` keeps both the best-estimated step and the last step and `seeds.py --pick both` compares them, that the full-split score `train.py` saves in each checkpoint is exactly what `evaluate.py` gives (and that scoring it doesn't change the sample written afterwards), that `seeds.py` scores the last step by default, that `checkpoints/ckpt.pt` still loads, that the key/value cache gives the same logits as a full forward pass (and the same window rule, step by step, as the browser engine), that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint that talks about tokens (and rebuilds the committed `docs/index.html` byte for byte, with its character wording unchanged), and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
+The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that the learning-rate schedule warms up, decays to its floor and stays constant when it is off (and that `train.py` runs end to end with it and gradient clipping), that tied weights are one tensor that gets the sum of both gradients, stay tied through an optimizer step and a save and load, and run the same in the browser engine, that the same seed trains exactly the same weights (and another seed doesn't) and `seeds.py` trains, scores and resumes a sweep, that `train.py` keeps both the best-estimated step and the last step and `seeds.py --pick both` compares them, that the full-split score `train.py` saves in each checkpoint is exactly what `evaluate.py` gives (and that scoring it doesn't change the sample written afterwards), that `seeds.py` scores the last step by default, that a run stopped part-way and continued with `--resume` ends with exactly the same checkpoints, history, score and sample as an uninterrupted one (for the default recipe, warmup + cosine with clipping, and BPE with tied weights), that `--resume` refuses different settings or a different text and starts from step 0 when there is nothing to resume, that `seeds.py` carries on a seed that was cut off instead of skipping it, that `checkpoints/ckpt.pt` still loads, that the key/value cache gives the same logits as a full forward pass (and the same window rule, step by step, as the browser engine), that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint that talks about tokens (and rebuilds the committed `docs/index.html` byte for byte, with its character wording unchanged), and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
 
 ## How it works
 
@@ -211,6 +215,7 @@ characters -> token embedding + position embedding
 | `train_seed`, `spread` | `seeds.py` | Trains the same settings once per seed and reports the mean, sample standard deviation and range of bits per character, so a difference between two recipes can be checked against run-to-run noise |
 | `full_validation` | `train.py` | After the last step, scores `final.pt` and `ckpt.pt` on every token of the validation split with `evaluate_text`, prints both and their difference, and saves the score in each checkpoint, so every training log ends with an exact number instead of a 50-batch estimate |
 | `save_checkpoint`, `compare` | `train.py`, `seeds.py` | Training keeps both the step with the best estimated validation loss (`ckpt.pt`) and the last step (`final.pt`); `compare` scores the two on the full validation split and reports the difference per run, so a noisy pick can be seen instead of hidden in the results |
+| `save_resume_state`, `--resume` | `train.py` | At each evaluation, saves the weights, the AdamW state, the random generators and the step to `resume.pt`; `--resume` loads them back, checks the settings and text match, skips the evaluation it already did and carries on, so the batches and dropout masks continue exactly where they stopped |
 | `write` | `app.py` | The Gradio app's loop: samples one token at a time from any checkpoint and streams the text to the page until the requested number of characters is written |
 | Browser engine | `web/engine.js` | The same forward pass in JavaScript, with a key/value cache; builds the checkpoint's tokenizer from the state the page embeds |
 | `page_text` | `export_web.py` | Fills the demo page's wording and spec table from the checkpoint: characters or tokens, context in characters, parameters, training run, loss and bits per character |
@@ -248,7 +253,7 @@ gpt-from-scratch/
 ├── tokenizer.py          character-level and BPE tokenizers
 ├── data.py               dataset download, batching, device selection
 ├── bigram.py             baseline model
-├── train.py              training loop, learning-rate schedule, evaluation, checkpointing, full-split score at the end
+├── train.py              training loop, learning-rate schedule, evaluation, checkpointing, resuming, full-split score at the end
 ├── sample.py             text generation from a checkpoint (optionally with the key/value cache)
 ├── evaluate.py           bits per character on the full validation split
 ├── seeds.py              trains one recipe with several seeds and reports the spread
@@ -263,7 +268,7 @@ gpt-from-scratch/
 │   ├── bpe.html          the same demo running the BPE model
 │   └── DEVLOG.md         what changed and why, build by build
 ├── tests/                pytest tests for the model, tokenizers, checkpoint loading, the app and the JS engine
-├── checkpoints/ckpt.pt   trained small model (training also writes final.pt, the last step, which stays out of git)
+├── checkpoints/ckpt.pt   trained small model (training also writes final.pt, the last step, and resume.pt while it runs; both stay out of git)
 ├── results/              training logs and a full sample
 ├── assets/               screenshots
 ├── train_colab.ipynb     GPU training on Google Colab
@@ -273,6 +278,8 @@ gpt-from-scratch/
 ## Next steps
 
 - [ ] Train the `full` configuration on a GPU and add the result
+  - [x] Resume an interrupted run exactly (`train.py --resume`, `--stop-at`), with the Colab notebook saving to Google Drive, since free Colab sessions disconnect
+  - [ ] Run it on a Colab T4 and add the result to the table
 - [x] Batch all attention heads into one matrix multiply
 - [x] Replace the character tokenizer with BPE
   - [x] Byte-level BPE tokenizer written from scratch, usable with `train.py --tokenizer bpe`

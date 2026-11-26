@@ -9,15 +9,24 @@ Usage:
     python train.py --max-iters 2000 --device cuda
     python train.py --config small --lr-schedule cosine --grad-clip 1.0   # warmup, cosine decay, clipping
     python train.py --config small --tie-weights                          # one matrix for embedding and output
+    python train.py --config full --out checkpoints/full --resume         # continue an interrupted run
 
 Two checkpoints are written to --out: ckpt.pt holds the step with the best estimated validation
 loss, final.pt the weights after the last step. When training ends, both are scored on the whole
 validation split (the same exact number evaluate.py prints), and the score is saved in each
 checkpoint under "val_full". --no-full-eval skips that, e.g. for a very large validation text.
+
+At every evaluation before the last, train.py also writes resume.pt: the weights, the AdamW
+state, the random number generators and the step it got to. If a run is cut off (a Colab session
+disconnecting, a laptop going to sleep), the same command with --resume carries on from the
+last evaluation. On a CPU it ends with exactly the weights an uninterrupted run would have (on a
+GPU, some kernels aren't bit-for-bit deterministic, so it is the same run but not always the same
+bits). resume.pt is deleted once the last step is trained.
 """
 
 import argparse
 import copy
+import hashlib
 import math
 import os
 import time
@@ -28,7 +37,9 @@ import torch
 from data import DEFAULT_PATH, get_batch, load_dataset, pick_device, split_text
 from evaluate import evaluate_text
 from model import GPT, GPTConfig
-from tokenizer import BPETokenizer, CharTokenizer
+from tokenizer import BPETokenizer, CharTokenizer, load_tokenizer
+
+RESUME_FILE = "resume.pt"
 
 # Two presets. "full" matches the hyperparameters in the video (~10.8M params).
 PRESETS = {
@@ -65,6 +76,10 @@ def parse_args():
                    help="share one matrix between the token embedding and the output layer")
     p.add_argument("--no-full-eval", action="store_true",
                    help="don't score ckpt.pt and final.pt on the whole validation split at the end")
+    p.add_argument("--resume", action="store_true",
+                   help=f"continue from {RESUME_FILE} in --out if there is one (else start from step 0)")
+    p.add_argument("--stop-at", type=int, default=None,
+                   help=f"stop at the first evaluation at or after this step, leaving {RESUME_FILE} to --resume from")
     # Any preset value can be overridden from the command line.
     for k, v in PRESETS["full"].items():
         p.add_argument(f"--{k.replace('_', '-')}", type=type(v), default=None)
@@ -160,6 +175,50 @@ def full_validation_line(full, n_chars):
                    f" | last - picked {f['bits_per_char'] - b['bits_per_char']:+.3f}")
 
 
+def training_settings(args, cfg, text: str) -> dict:
+    """Everything that decides what a run trains, so a resumed run can check it is the same run.
+
+    The text is compared by a hash rather than by --data, so the file can move (e.g. into a
+    Colab session's working directory) as long as its contents don't change.
+    """
+    return {
+        **cfg,  # the preset with any overrides: model size, batch, steps, eval interval, peak lr
+        "tokenizer": args.tokenizer,
+        "bpe_vocab_size": args.bpe_vocab_size if args.tokenizer == "bpe" else None,
+        "lr_schedule": args.lr_schedule,
+        "warmup_iters": args.warmup_iters,
+        "min_lr": args.min_lr,
+        "grad_clip": args.grad_clip,
+        "tie_weights": args.tie_weights,
+        "seed": args.seed,
+        "data_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    }
+
+
+def settings_mismatch(saved: dict, now: dict) -> list[str]:
+    """One line per setting that differs between the interrupted run and this command."""
+    return [f"  {k}: {saved.get(k)!r} in {RESUME_FILE}, {now.get(k)!r} now"
+            for k in sorted(set(saved) | set(now)) if saved.get(k) != now.get(k)]
+
+
+def rng_state(device: str) -> dict:
+    """The random generators that training draws from: batches, dropout masks, eval batches."""
+    state = {"cpu": torch.get_rng_state()}
+    if device == "cuda":
+        state["cuda"] = torch.cuda.get_rng_state_all()  # dropout on the GPU uses its own generator
+    elif device == "mps":
+        state["mps"] = torch.mps.get_rng_state()
+    return state
+
+
+def set_rng_state(state: dict, device: str):
+    torch.set_rng_state(state["cpu"])
+    if device == "cuda" and "cuda" in state:
+        torch.cuda.set_rng_state_all(state["cuda"])
+    elif device == "mps" and "mps" in state:
+        torch.mps.set_rng_state(state["mps"])
+
+
 def main():
     args = parse_args()
     cfg = dict(PRESETS[args.config])
@@ -178,7 +237,23 @@ def main():
     # tokenizer is validated on exactly the same characters and evaluate.py can compare them.
     # For characters this is the same split as before; BPE merges are learned from train text only.
     train_text, val_text = split_text(text)
-    if args.tokenizer == "bpe":
+    settings = training_settings(args, cfg, text)
+    resume_path = os.path.join(args.out, RESUME_FILE)
+    resume = None
+    if args.resume and os.path.exists(resume_path):
+        resume = torch.load(resume_path, map_location="cpu", weights_only=False)
+        diff = settings_mismatch(resume["settings"], settings)
+        if diff:
+            raise SystemExit(f"--resume: {resume_path} is from a run with different settings:\n" + "\n".join(diff)
+                             + "\nrun the original command again with --resume, or train without --resume to start over")
+    elif args.resume:
+        print(f"no {resume_path} to resume from, starting from step 0")
+    elif os.path.exists(resume_path):
+        print(f"note: starting from step 0 and replacing {resume_path} (pass --resume to continue it instead)")
+
+    if resume is not None:
+        tok = load_tokenizer(resume)  # the merges it learned, instead of learning them again
+    elif args.tokenizer == "bpe":
         print(f"learning {args.bpe_vocab_size - 256} BPE merges ...")
         tok = BPETokenizer.train(train_text, args.bpe_vocab_size)
     else:
@@ -220,6 +295,14 @@ def main():
             + f") | grad clip: {args.grad_clip if args.grad_clip > 0 else 'off'}"
         )
 
+    start_it = 0
+    if resume is not None:
+        model.load_state_dict(resume["model"])
+        optimizer.load_state_dict(resume["optimizer"])  # AdamW's running averages and step counts
+        start_it = resume["step"]
+        print(f"resuming from step {start_it} of {cfg['max_iters']} "
+              f"({resume['elapsed'] / 60:.1f} min trained so far, {resume_path})")
+
     # ---- training loop ----
     if device == "cuda":
         hardware = torch.cuda.get_device_name()
@@ -254,13 +337,44 @@ def main():
             path,
         )
 
+    def save_resume_state(step, elapsed):
+        """Everything the loop needs to carry on from `step` (an eval step, not trained yet).
+
+        It is saved right after the eval and the ckpt.pt save, so the random state here is the
+        one the training step at `step` starts from. Written to a temporary file and renamed, so a
+        run cut off mid-save leaves the previous resume.pt intact.
+        """
+        tmp = resume_path + ".tmp"
+        torch.save(
+            {
+                "step": step,
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "rng": rng_state(device),
+                "best_val": best_val,
+                "best_step": best_step,
+                "history": history,
+                "elapsed": elapsed,
+                "settings": settings,
+                "tokenizer": tok.state(),
+            },
+            tmp,
+        )
+        os.replace(tmp, resume_path)
+
     best_val = float("inf")
     best_step = 0
     history = []
+    if resume is not None:
+        best_val, best_step, history = resume["best_val"], resume["best_step"], resume["history"]
+        # Last of all, so nothing between here and the first step draws random numbers.
+        set_rng_state(resume["rng"], device)
     grad_norms = []  # global gradient norm (before clipping) of each step since the last eval
-    t0 = time.time()
-    for it in range(cfg["max_iters"] + 1):
-        if it % cfg["eval_interval"] == 0 or it == cfg["max_iters"]:
+    t0 = time.time() - (resume["elapsed"] if resume is not None else 0.0)
+    for it in range(start_it, cfg["max_iters"] + 1):
+        # The eval at the step it resumes from already ran (and is in history) before the cut-off.
+        is_eval = it % cfg["eval_interval"] == 0 or it == cfg["max_iters"]
+        if is_eval and not (resume is not None and it == start_it):
             losses = estimate_loss(model, splits, cfg, device)
             elapsed = time.time() - t0
             extra = ""
@@ -286,6 +400,10 @@ def main():
                 # both on the whole validation split (seeds.py --pick both does it for a sweep).
                 save_checkpoint(os.path.join(args.out, "final.pt"), it, losses["val"], elapsed)
                 break
+            save_resume_state(it, elapsed)
+            if args.stop_at is not None and it >= args.stop_at:
+                print(f"stopping at step {it} as asked; carry on with the same command and --resume")
+                return
 
         for group in optimizer.param_groups:
             group["lr"] = get_lr(it, cfg["max_iters"], cfg["learning_rate"], **schedule)
@@ -304,6 +422,8 @@ def main():
         grad_norms.append(norm.item())
         optimizer.step()
 
+    if os.path.exists(resume_path):
+        os.remove(resume_path)  # the run is complete; ckpt.pt and final.pt are what's left to use
     print(f"\ndone in {(time.time() - t0) / 60:.1f} min | best val loss {best_val:.4f} (step {best_step})")
     print(f"checkpoint saved to {os.path.join(args.out, 'ckpt.pt')} | last step saved to {os.path.join(args.out, 'final.pt')}")
 
