@@ -1,0 +1,37 @@
+$ python evaluate.py --by-context
+validation split: 111,540 characters
+
+| Checkpoint | Tokenizer | Vocab | Parameters | Val tokens | Chars/token | Context (chars) | Loss/token | Bits/token | Bits/char |
+|---|---|---|---|---|---|---|---|---|---|
+| `checkpoints/ckpt.pt` | char | 65 | 816,705 | 111,539 | 1.00 | 64 | 1.6126 | 2.327 | **2.327** |
+
+`checkpoints/ckpt.pt` by context length (chars the prediction could see):
+
+| Context (chars) | Targets | Share | Loss/token | Bits/token |
+|---|---|---|---|---|
+| 1 | 1,743 | 1.6% | 2.5385 | 3.662 |
+| 2 | 1,743 | 1.6% | 2.0968 | 3.025 |
+| 3-4 | 3,486 | 3.1% | 1.8036 | 2.602 |
+| 5-8 | 6,972 | 6.3% | 1.6586 | 2.393 |
+| 9-16 | 13,944 | 12.5% | 1.6154 | 2.331 |
+| 17-32 | 27,888 | 25.0% | 1.5700 | 2.265 |
+| 33-64 | 55,763 | 50.0% | 1.5715 | 2.267 |
+
+$ python evaluate.py --by-context --stride 16
+validation split: 111,540 characters
+
+| Checkpoint | Tokenizer | Vocab | Parameters | Val tokens | Chars/token | Context (chars) | Loss/token | Bits/token | Bits/char |
+|---|---|---|---|---|---|---|---|---|---|
+| `checkpoints/ckpt.pt` | char | 65 | 816,705 | 111,539 | 1.00 | 64 | 1.5749 | 2.272 | **2.272** |
+
+`checkpoints/ckpt.pt` by context length (chars the prediction could see):
+
+| Context (chars) | Targets | Share | Loss/token | Bits/token |
+|---|---|---|---|---|
+| 1 | 1 | 0.0% | 0.3592 | 0.518 |
+| 2 | 1 | 0.0% | 0.3378 | 0.487 |
+| 3-4 | 2 | 0.0% | 2.0801 | 3.001 |
+| 5-8 | 4 | 0.0% | 0.4697 | 0.678 |
+| 9-16 | 8 | 0.0% | 0.9670 | 1.395 |
+| 17-32 | 16 | 0.0% | 1.0967 | 1.582 |
+| 33-64 | 111,507 | 100.0% | 1.5751 | 2.272 |

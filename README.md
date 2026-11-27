@@ -86,6 +86,17 @@ With three fresh seeds each, both schedules have a standard deviation of 0.009-0
 
 The pick costs about 0.011 bits per character when it goes wrong, about one seed-to-seed standard deviation. Seeds 2 and 3 already picked step 5,000 for both schedules, so scoring the last step for seeds 1-3 gives a mean of 2.307 (std 0.008) for the constant rate and 2.269 (std 0.005) for warmup + cosine: the schedule gain is 0.038 bits (1.6%), and the spread between seeds is smaller once the pick is taken out. Seed 1337 was rerun on the current PyTorch version, so it differs slightly from the earlier tables. The logs are in [`results/pick_final.txt`](results/pick_final.txt). `train.py` now prints this comparison itself at the end of every run; rerunning seed 1 of both schedules gave exactly the numbers above ([`results/full_eval.txt`](results/full_eval.txt)).
 
+### How much of the context window it uses
+
+`evaluate.py --by-context` splits the full-split score by how many characters each prediction could see. Scored with back-to-back 64-character windows (the default, the same conditions as training), every context length from 1 to 64 gets the same number of targets, so the committed model's 2.327 bits per character breaks down as:
+
+| Context (chars) | 1 | 2 | 3-4 | 5-8 | 9-16 | 17-32 | 33-64 |
+|---|---|---|---|---|---|---|---|
+| Share of targets | 1.6% | 1.6% | 3.1% | 6.3% | 12.5% | 25.0% | 50.0% |
+| Bits/char | 3.662 | 3.025 | 2.602 | 2.393 | 2.331 | **2.265** | **2.267** |
+
+The first few characters of context matter most: going from 1 to 3-4 saves a full bit. After about 16 characters the curve is flat: 17-32 and 33-64 score the same, and in 8-character bins the second half of the window wanders between 2.24 and 2.30 bits without a trend. So this model uses roughly the last line of text and gets nothing measurable from the rest of its 64-character window, which fits the [limitation](#limitations) that it loses track of speakers. It also fits the earlier finding that restarting the key/value cache from the newest half of the window costs nothing. The output is in [`results/context_eval.txt`](results/context_eval.txt).
+
 A sample from the small model, given the prompt `ROMEO:`:
 
 ```
@@ -123,6 +134,7 @@ python train.py --config small --tie-weights --out checkpoints/tied     # one ma
 python sample.py --tokens 1000 --top-k 20 --num-samples 3
 python sample.py --tokens 5000 --kv-cache                             # key/value cache: 2-9x faster sampling on CPU
 python evaluate.py checkpoints/ckpt.pt checkpoints/bpe/ckpt.pt       # bits per character on the validation split
+python evaluate.py --by-context                                      # the same score split by how much context each prediction had
 python seeds.py --seeds 1 2 3 --out checkpoints/seeds/cosine -- --config small --max-iters 5000 --lr-schedule cosine
 python seeds.py --pick both --ckpts checkpoints/seeds/cosine/seed*/ckpt.pt   # best-estimated step against the last step
 python train.py --config small --no-full-eval                       # skip scoring the checkpoints on the whole validation split
@@ -145,7 +157,7 @@ ids.map(id => d.push(id)).join("");            // holds back a character split a
 
 `--tie-weights` sets `tie_weights` in the model config, so the checkpoint, `sample.py`, `evaluate.py`, `app.py` and `export_web.py` all rebuild the model tied. The checkpoint stores the shared matrix once, and the exported page leaves `lm_head.weight` out, because `web/engine.js` scores tokens with the embedding matrix when it is missing. Checkpoints saved before the option existed load untied, as they were trained.
 
-`evaluate.py` takes any number of checkpoints and prints a table with loss per token, bits per token and bits per character on the full validation split (the last 10% of the text). `--stride 32` uses overlapping windows so every token after the first window gets at least 32 tokens of context; this lowers the numbers a little and takes twice as long.
+`evaluate.py` takes any number of checkpoints and prints a table with loss per token, bits per token and bits per character on the full validation split (the last 10% of the text). `--stride 32` uses overlapping windows so every token after the first window gets at least 32 tokens of context; this lowers the numbers a little and takes twice as long. `--by-context` adds a table per checkpoint with the loss for each bucket of context lengths (1, 2, 3-4, 5-8, ... up to the context window, counted in tokens), from exactly the same windows, so the buckets average back to the main number.
 
 `seeds.py` passes everything after `--` to `train.py`, trains seed N into `<out>/seed<N>/` (with its log in `train_log.txt` there), then prints each run's best step, loss per token and bits per character, and the mean, sample standard deviation and range over the runs. A seed that finished (it has `final.pt`) is skipped, and a seed that was cut off part-way carries on from its `resume.pt`, with the rest of its log appended, so an interrupted sweep restarts with the same command. `--ckpts` adds checkpoints that are already trained, or summarises them without training anything. `train.py` now saves its `seed` in the checkpoint; older checkpoints show `?`.
 
@@ -187,7 +199,7 @@ pip install pytest
 python -m pytest tests
 ```
 
-The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that the learning-rate schedule warms up, decays to its floor and stays constant when it is off (and that `train.py` runs end to end with it and gradient clipping), that tied weights are one tensor that gets the sum of both gradients, stay tied through an optimizer step and a save and load, and run the same in the browser engine, that the same seed trains exactly the same weights (and another seed doesn't) and `seeds.py` trains, scores and resumes a sweep, that `train.py` keeps both the best-estimated step and the last step and `seeds.py --pick both` compares them, that the full-split score `train.py` saves in each checkpoint is exactly what `evaluate.py` gives (and that scoring it doesn't change the sample written afterwards), that `seeds.py` scores the last step by default, that a run stopped part-way and continued with `--resume` ends with exactly the same checkpoints, history, score and sample as an uninterrupted one (for the default recipe, warmup + cosine with clipping, and BPE with tied weights), that `--resume` refuses different settings or a different text and starts from step 0 when there is nothing to resume, that `seeds.py` carries on a seed that was cut off instead of skipping it, that `checkpoints/ckpt.pt` still loads, that the key/value cache gives the same logits as a full forward pass (and the same window rule, step by step, as the browser engine), that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint that talks about tokens (and rebuilds the committed `docs/index.html` byte for byte, with its character wording unchanged), and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
+The tests check that the batched attention gives the same outputs as the original per-head version, that `evaluate.py` scores every validation token exactly once (and matches a one-token-at-a-time reference), that its loss by context length adds up to the total and puts every target under the context it really had (checked one forward pass per target, for back-to-back windows and for `--stride 1`), that the learning-rate schedule warms up, decays to its floor and stays constant when it is off (and that `train.py` runs end to end with it and gradient clipping), that tied weights are one tensor that gets the sum of both gradients, stay tied through an optimizer step and a save and load, and run the same in the browser engine, that the same seed trains exactly the same weights (and another seed doesn't) and `seeds.py` trains, scores and resumes a sweep, that `train.py` keeps both the best-estimated step and the last step and `seeds.py --pick both` compares them, that the full-split score `train.py` saves in each checkpoint is exactly what `evaluate.py` gives (and that scoring it doesn't change the sample written afterwards), that `seeds.py` scores the last step by default, that a run stopped part-way and continued with `--resume` ends with exactly the same checkpoints, history, score and sample as an uninterrupted one (for the default recipe, warmup + cosine with clipping, and BPE with tied weights), that `--resume` refuses different settings or a different text and starts from step 0 when there is nothing to resume, that `seeds.py` carries on a seed that was cut off instead of skipping it, that `checkpoints/ckpt.pt` still loads, that the key/value cache gives the same logits as a full forward pass (and the same window rule, step by step, as the browser engine), that the JavaScript engine matches PyTorch for both weight layouts and both tokenizers (including encoding prompts and streaming text back), that `export_web.py` builds a page from a BPE checkpoint that talks about tokens (and rebuilds the committed `docs/index.html` byte for byte, with its character wording unchanged), and that the JavaScript tokenizers give the same chunks, ids and decoded text as the Python ones, on the whole of Tiny Shakespeare and on awkward Unicode (the JavaScript tests need Node.js and are skipped without it).
 
 ## How it works
 
@@ -212,6 +224,7 @@ characters -> token embedding + position embedding
 | `GPT` | `model.py` | Embeddings, four blocks, output head, and `generate()` with temperature and top-k sampling; with `tie_weights` the output head reuses the token embedding matrix, so each token's input vector is also the direction that predicts it |
 | `KVCache`, `next_logits` | `model.py` | Keeps every layer's keys and values for the tokens already in the window, so `generate(use_cache=True)` feeds one new token per step; when the window is full it rebuilds the cache from the newest half, like the browser engine |
 | `total_nll`, `evaluate_text` | `evaluate.py` | Slides the context window over the whole validation split, adds up -log p of every token once, and divides by the number of characters to get bits per character |
+| `nll_by_context`, `loss_by_context` | `evaluate.py` | The same windows, but each target's -log p is added to a slot for how many tokens it could see (position p in a window sees p+1), then grouped into power-of-two buckets, to show how much of the context window the model uses |
 | `train_seed`, `spread` | `seeds.py` | Trains the same settings once per seed and reports the mean, sample standard deviation and range of bits per character, so a difference between two recipes can be checked against run-to-run noise |
 | `full_validation` | `train.py` | After the last step, scores `final.pt` and `ckpt.pt` on every token of the validation split with `evaluate_text`, prints both and their difference, and saves the score in each checkpoint, so every training log ends with an exact number instead of a 50-batch estimate |
 | `save_checkpoint`, `compare` | `train.py`, `seeds.py` | Training keeps both the step with the best estimated validation loss (`ckpt.pt`) and the last step (`final.pt`); `compare` scores the two on the full validation split and reports the difference per run, so a noisy pick can be seen instead of hidden in the results |
@@ -255,7 +268,7 @@ gpt-from-scratch/
 ├── bigram.py             baseline model
 ├── train.py              training loop, learning-rate schedule, evaluation, checkpointing, resuming, full-split score at the end
 ├── sample.py             text generation from a checkpoint (optionally with the key/value cache)
-├── evaluate.py           bits per character on the full validation split
+├── evaluate.py           bits per character on the full validation split, overall and by context length
 ├── seeds.py              trains one recipe with several seeds and reports the spread
 ├── app.py                Gradio web app for character or BPE checkpoints (local or Hugging Face Spaces)
 ├── export_web.py         builds the browser demo from a checkpoint
@@ -297,6 +310,7 @@ gpt-from-scratch/
 - [x] Seed-to-seed spread of the `small` config (`seeds.py`; std of 0.009-0.010 bits per character over 3 seeds, schedule gain 2.0% averaged over 4)
 - [x] Keep the last step as well as the best-estimated one (`final.pt`, `seeds.py --pick both`; the last step was 0.011 bits per character better in all 4 runs where they differed)
 - [x] Score both checkpoints on the whole validation split at the end of training (`val_full` in each checkpoint; about 3 s per checkpoint on one CPU core), and make the last step `seeds.py`'s default
+- [x] Loss by context length (`evaluate.py --by-context`; the small model stops improving after about 16 characters of its 64)
 
 ## Acknowledgements
 

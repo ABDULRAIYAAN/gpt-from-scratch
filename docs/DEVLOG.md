@@ -1,5 +1,23 @@
 # Devlog
 
+## 2026-11-27: Loss by context length
+
+**Why.** The model has a 64-character context window, but I had no number for how much of it the model actually uses. The README says it loses track of speakers after about a line, and the key/value cache restarts from the newest half of the window without any measurable cost, which both hint that the far end of the window isn't doing much. I wanted to measure that instead of guessing, and it doesn't need any training, so it fits on this CPU.
+
+**What changed.** `evaluate.py` has a new `nll_by_context`, which runs exactly the same windows as `total_nll` but adds each target's -log p to a slot for how much context it had: in a window that starts at `begin`, the target at position p is predicted from `ids[begin : begin+p+1]`, so it saw p+1 tokens. `loss_by_context` groups those slots into power-of-two buckets (1, 2, 3-4, 5-8, ... up to the context window) and `python evaluate.py --by-context` prints one table per checkpoint. I pulled the window layout out of `total_nll` into `score_windows` so both functions use the same one, and left `total_nll`'s own sum alone so every number it gave before is unchanged.
+
+**Numbers.** For the committed `checkpoints/ckpt.pt` on the full validation split (4.4 s for both tables on the 2-core CPU), in bits per character:
+
+| Context (chars) | 1 | 2 | 3-4 | 5-8 | 9-16 | 17-32 | 33-64 |
+|---|---|---|---|---|---|---|---|
+| Bits/char | 3.662 | 3.025 | 2.602 | 2.393 | 2.331 | 2.265 | 2.267 |
+
+Going from 1 to 3-4 characters of context saves a whole bit, and 9-16 is nearly there. After that it is flat: 17-32 and 33-64 score the same, and in 8-character bins the second half of the window goes 2.286, 2.304, 2.240, 2.239, which is noise around the same level rather than a trend. So the model gets nothing measurable from characters more than about 16-32 back. That also explains the gap between the default score (2.327) and `--stride 16` (2.272): with back-to-back windows a quarter of the targets have 16 characters of context or fewer, while with stride 16 every target sees at least 48. The output is in `results/context_eval.txt`. I don't have the BPE checkpoint on this machine, so I haven't run it there yet.
+
+**Tests.** In `tests/test_evaluate.py`: the slots add up to `total_nll` and count every target once for several lengths and strides; with back-to-back windows and with `--stride 1`, every slot matches a reference that scores each target in its own forward pass with exactly the context it should have; the buckets cover every length from 1 to the window exactly once; the bucket rows average back to `evaluate_text`'s loss and leave out empty buckets; the model's train/eval mode is left alone; and on the committed checkpoint the first buckets fall steadily and the command line prints the same table. I checked that putting the losses in the wrong slots makes six of them fail. All 164 tests pass.
+
+**Next.** Run `--by-context` on the BPE model, which sees about 120 characters per window, to check whether it uses the extra text or flattens out just as early.
+
 ## 2026-11-26: Resume an interrupted training run exactly
 
 **Why.** The one open roadmap item I can't finish on this machine is training the `full` config on a GPU, and the plan for that is a free Colab T4. Free Colab sessions disconnect, and until now a disconnect meant starting again from step 0, with the checkpoints gone along with the VM. So before spending GPU time, training has to survive being cut off.
