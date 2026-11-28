@@ -8,7 +8,8 @@ import torch
 from torch.nn import functional as F
 
 from data import DEFAULT_PATH, split_text
-from evaluate import context_buckets, evaluate_text, load_checkpoint, loss_by_context, nll_by_context, total_nll
+from evaluate import (context_buckets, evaluate_text, load_checkpoint, loss_by_char_context, loss_by_context,
+                      nll_by_context, per_target_nll, token_char_counts, total_nll)
 from model import GPT, GPTConfig
 from tokenizer import BPETokenizer, CharTokenizer
 
@@ -231,3 +232,150 @@ def test_committed_checkpoint_does_better_with_more_context():
     assert "by context length (chars the prediction could see)" in out
     assert f"| 33-64 | {rows[-1]['targets']:,} |" in out
     assert f"{rows[0]['bits_per_token']:.3f}" in out
+
+
+# ---- per-target scores and context counted in characters ----
+
+@pytest.mark.parametrize("n", [2, 5, 9, 30, 41])
+@pytest.mark.parametrize("stride", [1, 3, 8])
+def test_per_target_nll_adds_up_to_the_total(n, stride):
+    model, ids = tiny_model(), random_ids(n, seed=n)
+    nll, context = per_target_nll(model, ids, stride=stride, batch_size=4)
+    total, scored = total_nll(model, ids, stride=stride, batch_size=4)
+    assert nll.shape == context.shape == (n - 1,)
+    assert nll.sum().item() == pytest.approx(total, rel=1e-6)
+    assert 1 <= context.min() and context.max() <= TINY.block_size
+
+
+@pytest.mark.parametrize("stride,context_of", [(None, lambda t: (t - 1) % TINY.block_size + 1),
+                                               (1, lambda t: min(t, TINY.block_size))])
+def test_per_target_nll_matches_scoring_each_target_on_its_own(stride, context_of):
+    model, ids = tiny_model(), random_ids(30, seed=3)
+    nll, context = per_target_nll(model, ids, stride=stride, batch_size=3)
+    with torch.no_grad():
+        for t in range(1, len(ids)):
+            c = context_of(t)
+            assert context[t - 1].item() == c
+            logits, _ = model(ids[t - c : t].unsqueeze(0))
+            ref = -F.log_softmax(logits[0, -1], dim=-1)[ids[t]].item()
+            assert nll[t - 1].item() == pytest.approx(ref, rel=1e-5, abs=1e-6)
+
+
+def test_nll_by_context_is_unchanged_by_building_on_per_target_nll():
+    # The slots are just the per-target scores added up by context length.
+    model, ids = tiny_model(), random_ids(41, seed=5)
+    nll, count = nll_by_context(model, ids, stride=3)
+    per, context = per_target_nll(model, ids, stride=3)
+    for c in range(1, TINY.block_size + 1):
+        assert count[c - 1].item() == (context == c).sum().item()
+        assert nll[c - 1].item() == pytest.approx(per[context == c].sum().item(), abs=1e-9)
+
+
+ODD_TEXT = "Café naïve — 東京 👋🏽 done.\nO Romeo, Romeo! wherefore art thou Romeo?\t ünïcödé " * 3
+
+
+def test_token_char_counts_add_up_to_the_text():
+    bpe = BPETokenizer.train(ODD_TEXT, 300)
+    ids = bpe.encode(ODD_TEXT)
+    counts = token_char_counts(bpe, ids)
+    assert counts.shape == (len(ids),)
+    assert counts.sum().item() == len(ODD_TEXT)
+    # Each prefix of tokens is credited with the characters that have started by its end.
+    for k in range(1, len(ids) + 1):
+        raw = b"".join(bpe.vocab[i] for i in ids[:k])
+        assert counts[:k].sum().item() == sum(1 for byte in raw if byte & 0xC0 != 0x80)
+    char = CharTokenizer.from_text(ODD_TEXT)
+    assert torch.equal(token_char_counts(char, char.encode(ODD_TEXT)), torch.ones(len(ODD_TEXT), dtype=torch.long))
+
+
+def test_char_context_is_token_context_for_the_character_tokenizer():
+    # With one character per token, counting context in characters changes nothing.
+    text = "".join(chr(97 + (i * 7 + i // 5) % 11) for i in range(300))
+    tok, model = CharTokenizer.from_text(text), tiny_model()
+    for stride in (None, 3):
+        by_tok = loss_by_context(model, tok, text, stride=stride)
+        by_char = loss_by_char_context(model, tok, text, stride=stride)
+        assert [r["context"] for r in by_char] == [r["context"] for r in by_tok]
+        assert [r["targets"] for r in by_char] == [r["targets"] for r in by_tok]
+        for a, b in zip(by_char, by_tok):
+            assert a["chars"] == a["targets"]
+            assert a["bits_per_char"] == pytest.approx(b["bits_per_token"], rel=1e-9)
+
+
+def tiny_bpe(text, seed=0):
+    tok = BPETokenizer.train(text, 280)
+    torch.manual_seed(seed)
+    cfg = GPTConfig(vocab_size=tok.vocab_size, block_size=8, n_embd=16, n_head=2, n_layer=2, dropout=0.0)
+    return GPT(cfg).eval(), tok
+
+
+SPEECH = ("To be, or not to be, that is the question: whether 'tis nobler in the mind to suffer "
+          "the slings and arrows of outrageous fortune, or to take arms against a sea of troubles. ") * 4
+
+
+@pytest.mark.parametrize("stride", [None, 1, 5])
+def test_bpe_char_context_counts_the_characters_the_model_saw(stride):
+    model, tok = tiny_bpe(SPEECH)
+    rows = loss_by_char_context(model, tok, SPEECH, stride=stride)
+    ids = tok.encode(SPEECH)
+    nll, context = per_target_nll(model, torch.tensor(ids), stride=stride)
+
+    # Reference: decode each target's context and target and bucket them by hand.
+    ref = {}
+    for t in range(1, len(ids)):
+        c = context[t - 1].item()
+        n_ctx = len(tok.decode(ids[t - c : t]))  # the speech is ASCII, so bytes are characters
+        bucket = next(b for b in context_buckets(1024) if b[0] <= n_ctx <= b[1])
+        r = ref.setdefault(bucket, [0, 0.0, 0])
+        r[0] += 1
+        r[1] += nll[t - 1].item()
+        r[2] += len(tok.decode([ids[t]]))
+    assert [row["context"] for row in rows] == sorted(ref)
+    for row in rows:
+        n, nats, chars = ref[row["context"]]
+        assert row["targets"] == n and row["chars"] == chars
+        assert row["bits_per_char"] == pytest.approx(nats / chars / math.log(2), rel=1e-9)
+    # BPE tokens are several characters long, so a window of 8 tokens reaches well past 8 characters.
+    assert rows[-1]["context"][1] > 8
+
+    # Added back up, the rows give exactly evaluate_text's bits per character.
+    r = evaluate_text(model, tok, SPEECH, stride=stride)
+    assert sum(row["targets"] for row in rows) == r["tokens"]
+    assert sum(row["chars"] for row in rows) == r["chars"]
+    bits = sum(row["bits_per_char"] * row["chars"] for row in rows) / r["chars"]
+    assert bits == pytest.approx(r["bits_per_char"], rel=1e-6)  # total_nll adds float32 sums
+    assert all(row["context"][1] & (row["context"][1] - 1) == 0 for row in rows)  # power-of-two buckets
+
+
+def test_by_context_chars_prints_both_models_side_by_side(tmp_path):
+    text = SPEECH * 3
+    data = tmp_path / "speech.txt"
+    data.write_text(text, encoding="utf-8")
+    _, val_text = split_text(text)
+    bpe_model, bpe_tok = tiny_bpe(text)
+    char_tok = CharTokenizer.from_text(text)
+    torch.manual_seed(1)
+    char_model = GPT(GPTConfig(vocab_size=char_tok.vocab_size, block_size=8, n_embd=16, n_head=2,
+                               n_layer=2, dropout=0.0)).eval()
+    paths = []
+    for name, model, tok in [("char.pt", char_model, char_tok), ("bpe.pt", bpe_model, bpe_tok)]:
+        torch.save({"model": model.state_dict(), "model_config": vars(model.config), "tokenizer": tok.state()},
+                   tmp_path / name)
+        paths.append(str(tmp_path / name))
+
+    out = subprocess.run([sys.executable, os.path.join(ROOT, "evaluate.py"), *paths, "--data", str(data),
+                          "--by-context", "chars", "--device", "cpu"],
+                         capture_output=True, text=True, check=True, cwd=ROOT).stdout
+    assert out.count("by context length (chars the prediction could see)") == 2
+    assert "side by side" in out
+    char_rows = loss_by_char_context(char_model, char_tok, val_text)
+    bpe_rows = loss_by_char_context(bpe_model, bpe_tok, val_text)
+    assert f"| 5-8 | {char_rows[3]['bits_per_char']:.3f} | " in out
+    last = bpe_rows[-1]
+    assert f"| {last['context'][0]}-{last['context'][1]} |  | {last['bits_per_char']:.3f} |" in out
+
+    # Plain --by-context still counts tokens.
+    out = subprocess.run([sys.executable, os.path.join(ROOT, "evaluate.py"), paths[1], "--data", str(data),
+                          "--by-context", "--device", "cpu"],
+                         capture_output=True, text=True, check=True, cwd=ROOT).stdout
+    assert "by context length (tokens the prediction could see)" in out and "side by side" not in out

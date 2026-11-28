@@ -1,5 +1,24 @@
 # Devlog
 
+## 2026-11-28: Loss by context length, counted in characters
+
+**Why.** Yesterday's breakdown showed the character model stops improving after about 16-32 characters of its 64. The obvious follow-up was the BPE model, whose 64-token window holds about 120 characters: does it use the extra text? `--by-context` couldn't answer that, because it counts context in tokens, and a token is one character or several. "16 tokens of context" is about 30 characters for BPE and 16 for the character model, so the two tables don't line up.
+
+**What changed.** `evaluate.py` has a new `per_target_nll`, which runs the same windows as before but keeps each target's -log p and how many tokens it could see, instead of adding them into slots straight away. `nll_by_context` is now just those scores added up by context length (the existing tests still pass on it unchanged). `token_char_counts` gives the number of characters each token adds to the text: 1 for the character tokenizer, and for byte-level BPE the number of characters that *start* inside the token, so a token holding only the tail of a multi-byte character counts for none and the counts add up to `len(text)` exactly. `loss_by_char_context` turns each target's token context into characters with a running total of those counts, buckets the targets by characters (power-of-two buckets, rounded up so they line up between models), and reports each bucket's bits per character: its nats over the characters its target tokens spell out. `python evaluate.py ckpt.pt bpe/ckpt.pt --by-context chars` prints a table per checkpoint and then the buckets side by side. Plain `--by-context` still counts tokens, as before.
+
+**Numbers.** I didn't have the BPE checkpoint on this machine, so I retrained it with the same command as on 2026-11-15 (`small` config, 5,000 steps, 2-core CPU, 17.3 minutes with the test suite running alongside for part of it). It printed the same losses at every eval as `results/train_log_bpe.txt` and the same full-split score, 2.177 bits per character. Scoring both checkpoints with `--by-context chars` took 6.3 seconds. In bits per character:
+
+| Context (chars) | 1 | 2 | 3-4 | 5-8 | 9-16 | 17-32 | 33-64 | 65-128 | 129-256 |
+|---|---|---|---|---|---|---|---|---|---|
+| Characters | 3.662 | 3.025 | 2.602 | 2.393 | 2.331 | 2.265 | 2.267 | | |
+| BPE | 3.152 | 2.954 | 2.504 | 2.257 | 2.202 | 2.166 | 2.146 | 2.150 | 2.170 |
+
+For the character model the table is exactly yesterday's, as it should be. The BPE model keeps improving slightly longer (0.02 bits from 17-32 to 33-64 characters), but the 65-128 bucket, which holds 45% of its targets and is text the character model never sees, is no better than 33-64. So BPE's 6.4% lead doesn't come from seeing further back. It is 0.10-0.14 bits per character better at every length from 5 characters on, which points at the tokens themselves: predicting a common word piece in one go is easier than spelling it out. It isn't a perfectly controlled comparison, since a BPE target is a whole token and its buckets hold different predictions from the character model's. Counted in tokens, the BPE model is best at 9-16 tokens (4.005 bits per token) and a little worse at 33-64 (4.075), so the far end of its window may even hurt slightly. The output is in `results/context_eval_chars.txt`.
+
+**Tests.** In `tests/test_evaluate.py`: `per_target_nll` adds up to `total_nll` and gives every target the score and context of a reference that runs one forward pass per target, for back-to-back windows and `--stride 1`; `nll_by_context` is the per-target scores summed by context; `token_char_counts` adds up to the text on accents, CJK and emoji, with every prefix credited with the characters started so far; for the character tokenizer the character buckets equal the token buckets; for a tiny BPE model every bucket matches decoding each target's context by hand, for three strides, and the rows add back up to `evaluate_text`'s bits per character; and the command line prints both tables and the side-by-side one, while plain `--by-context` still counts tokens. Swapping the character count for the token count makes four of them fail. All 188 tests pass.
+
+**Next.** The far end of the window doesn't help either model. A cheap thing to try is training with `block_size` 32 and the same number of steps, which should be faster and, if this is right, score about the same.
+
 ## 2026-11-27: Loss by context length
 
 **Why.** The model has a 64-character context window, but I had no number for how much of it the model actually uses. The README says it loses track of speakers after about a line, and the key/value cache restarts from the newest half of the window without any measurable cost, which both hint that the far end of the window isn't doing much. I wanted to measure that instead of guessing, and it doesn't need any training, so it fits on this CPU.
